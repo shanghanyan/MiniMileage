@@ -20,6 +20,8 @@ with provenance and confidence:
 It is built to be **honest**: a datum enters the graph only with verifiable
 provenance (no hallucinations), and "just use your portal" is a valid answer.
 
+The verification / provenance / verdict skeleton is real and working; the data feeding it (cash fares and award space) is still stubbed and flagged as such.
+
 ## Install
 
 ```bash
