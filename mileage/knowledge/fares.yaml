@@ -1,0 +1,17 @@
+# Curated FALLBACK cash fares (Layer 2), US cents, one-way.
+#
+# In Phase 0 the primary fare source is Amadeus Flight Offers Search
+# (providers/amadeus.py). When no Amadeus key is configured, the pipeline
+# degrades gracefully (§2.4) to these curated reference fares, which the curated
+# provider emits flagged `hardcoded_fallback` at low trust — never `recommended`
+# (§7 step 4). They are the "price-to-beat" so a verdict can still be computed.
+#
+# Key format: ORIGIN-DEST-cabin
+fares:
+  LAX-JFK-economy: 15800       # ~$158 one-way transcon economy
+  JFK-LAX-economy: 15800
+  LAX-IST-business: 420000     # ~$4,200 one-way transcon+transatlantic business
+  IST-LAX-business: 420000
+  SFO-NRT-business: 380000     # ~$3,800 one-way transpacific business
+  NRT-SFO-business: 380000
+  LAX-LHR-business: 350000

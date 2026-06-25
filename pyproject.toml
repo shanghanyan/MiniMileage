@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mileage"
+version = "0.0.0"
+description = "A points-to-flights optimizer. Phase 0: one transferable currency end-to-end (Capital One -> Star Alliance partners), CLI-only honest vertical slice."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "PyYAML>=6.0,<7.0",
+    "networkx>=3.0,<4.0",
+    "httpx>=0.27,<1.0",
+]
+
+[project.scripts]
+mileage = "mileage.cli:main"
+
+[tool.setuptools]
+packages = [
+    "mileage",
+    "mileage.domain",
+    "mileage.providers",
+    "mileage.providers.aggregator",
+    "mileage.providers.brain",
+    "mileage.verify",
+    "mileage.graph",
+    "mileage.store",
+]
+
+[tool.setuptools.package-data]
+mileage = ["knowledge/*.yaml"]

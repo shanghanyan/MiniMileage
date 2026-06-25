@@ -1,0 +1,22 @@
+# Capital One transferable-miles ratios (Layer 4).
+# ratio = partner points received per 1 Capital One mile.
+#
+# LOAD-BEARING DOMAIN FACT (Cursor-Mileage-Plan.md §0):
+#   Capital One does NOT transfer directly to United MileagePlus.
+#   That absence is represented structurally — there is simply no `united`
+#   entry below. Value to United-flown routes is found by routing through
+#   Star Alliance partners and compounding cents-per-point.
+#
+# Capital One -> partner is 1:1 for these transfer partners (changes ~quarterly).
+from_currency: capital_one
+source: "Capital One transfer partners"
+url: https://www.capitalone.com/credit-cards/benefits/transfer-partners/
+trust: 1.0            # authoritative for ratios (§7 authoritative short-circuit)
+updated_at: "2026-06-01"
+partners:
+  aeroplan: 1.0       # Air Canada Aeroplan (Star Alliance)
+  turkish: 1.0        # Turkish Miles&Smiles (Star Alliance)
+  lifemiles: 1.0      # Avianca LifeMiles (Star Alliance)
+  krisflyer: 1.0      # Singapore KrisFlyer (Star Alliance)
+  eva: 1.0            # EVA Air Infinity MileageLands (Star Alliance)
+  # united: intentionally absent — see note above.

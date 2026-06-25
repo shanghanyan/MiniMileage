@@ -1,0 +1,31 @@
+# Aggregator (Engine A) target list — ordered, trust-weighted (§6).
+#
+# NOT USED IN PHASE 0 (the aggregator lands in Phase 1). Seeded here so the
+# scaffold is complete and the Phase 1 scraper has a starting target chain.
+# Only PUBLIC, non-WAF'd sources belong here; anything behind a heavy WAF is the
+# Brain's (Engine B) problem and is quarantined (§8).
+
+targets:
+  - name: awardtravelfinder
+    url: https://awardtravelfinder.example/charts
+    kind: aggregator
+    trust: 0.6
+    layers: [charts, award]
+
+  - name: 10xtravel-charts
+    url: https://10xtravel.example/award-charts
+    kind: blog
+    trust: 0.55
+    layers: [charts]
+
+  - name: aeroplan-chart-pdf
+    url: https://aircanada.example/aeroplan-chart.pdf
+    kind: pdf
+    trust: 0.65
+    layers: [charts]
+
+  - name: award-rss
+    url: https://awardfeeds.example/rss
+    kind: rss
+    trust: 0.4
+    layers: [charts, award]

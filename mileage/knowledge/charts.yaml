@@ -1,0 +1,91 @@
+# Partner award charts (Layer 4), one-way miles unless `roundtrip: true`.
+# Seeded curated values for the Phase 0 vertical slice. Refreshed by the
+# aggregator (Engine A) in Phase 1; these are the trusted-curated baseline.
+#
+# All chart-derived quotes are flagged `no_live_space` by the curated provider:
+# they prove a seat *can* cost this many miles, not that one is bookable today.
+
+region_map:
+  LAX: north_america
+  JFK: north_america
+  SFO: north_america
+  ORD: north_america
+  EWR: north_america
+  IAD: north_america
+  IST: europe
+  LHR: europe
+  CDG: europe
+  FRA: europe
+  NRT: north_asia
+  HND: north_asia
+  ICN: north_asia
+
+programs:
+  turkish:
+    name: Turkish Miles&Smiles
+    alliance: star_alliance
+    trust: 0.7
+    source: "Turkish Miles&Smiles partner award chart"
+    url: https://www.turkishairlines.com/en-int/miles-and-smiles/
+    updated_at: "2026-06-15"
+    bands:
+      # Turkish's sweet spot is North America <-> Europe (no intra-NA band).
+      - regions: [north_america, europe]
+        roundtrip: false
+        miles:
+          economy: 22500
+          business: 45000
+
+  aeroplan:
+    name: Air Canada Aeroplan
+    alliance: star_alliance
+    trust: 0.7
+    source: "Aeroplan flight reward chart (distance bands)"
+    url: https://www.aircanada.com/aeroplan/
+    updated_at: "2026-06-10"
+    bands:
+      - regions: [north_america, north_america]
+        roundtrip: false
+        miles:
+          economy: 17300      # transcon distance band, partner economy
+          business: 35000
+      - regions: [north_america, europe]
+        roundtrip: false
+        miles:
+          economy: 35000
+          business: 60000
+
+  lifemiles:
+    name: Avianca LifeMiles
+    alliance: star_alliance
+    trust: 0.65
+    source: "Avianca LifeMiles award chart"
+    url: https://www.lifemiles.com/
+    updated_at: "2026-06-12"
+    bands:
+      - regions: [north_america, north_america]
+        roundtrip: false
+        miles:
+          economy: 12500      # North America zone, one-way economy
+          business: 25000
+      - regions: [north_america, europe]
+        roundtrip: false
+        miles:
+          economy: 30000
+          business: 63000
+
+  ana:
+    name: ANA Mileage Club
+    alliance: star_alliance
+    trust: 0.6
+    source: "ANA Star Alliance award chart (round-trip)"
+    url: https://www.ana.co.jp/en/us/amc/
+    updated_at: "2026-06-05"
+    bands:
+      # ANA publishes ROUND-TRIP charts; the loader normalizes to one-way and
+      # flags `rt_to_ow_normalized` (§6 carried-over fix).
+      - regions: [north_america, north_asia]
+        roundtrip: true
+        miles:
+          economy: 60000
+          business: 75000

@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+
+# Mileage local state
+mileage.db
+*.db
+
+# Env / secrets
+.env
