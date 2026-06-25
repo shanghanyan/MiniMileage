@@ -23,7 +23,11 @@ from .build import SEAT_NODE
 
 
 def _portal_option(
-    cash_cents: int, portal_cpp: float, balance: int, fare_flags: list[str]
+    cash_cents: int,
+    portal_cpp: float,
+    balance: int,
+    fare_confidence: float,
+    fare_flags: list[str],
 ) -> PathOption:
     pts = portal_points_needed(cash_cents, portal_cpp)
     return PathOption(
@@ -34,7 +38,10 @@ def _portal_option(
         cash_cents=cash_cents,
         program=None,
         affordable=balance >= pts,
-        confidence=1.0,  # portal floor is a contractual rate
+        # The 1.25c rate is contractual, but the recommendation to cover THIS
+        # fare is only as trustworthy as the price-to-beat. Confidence is bounded
+        # by the fare so no row ever exceeds its weakest load-bearing input.
+        confidence=round(fare_confidence, 3),
         flags=list(fare_flags),
     )
 
@@ -51,7 +58,7 @@ def rank_paths(
 ) -> list[PathOption]:
     fare_flags = fare_flags or []
     options: list[PathOption] = [
-        _portal_option(cash_cents, portal_cpp, balance, fare_flags)
+        _portal_option(cash_cents, portal_cpp, balance, fare_confidence, fare_flags)
     ]
 
     if currency not in graph or SEAT_NODE not in graph:
