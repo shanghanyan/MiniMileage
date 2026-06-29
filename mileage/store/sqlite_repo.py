@@ -29,10 +29,12 @@ CREATE INDEX IF NOT EXISTS idx_edges_route ON edges(route_key);
 CREATE TABLE IF NOT EXISTS runs (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     route_key    TEXT NOT NULL,
+    user_id      TEXT NOT NULL DEFAULT 'local',
     verdict      TEXT,
     payload      TEXT NOT NULL,
     created_at   TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_runs_user ON runs(user_id);
 
 CREATE TABLE IF NOT EXISTS users (
     user_id      TEXT PRIMARY KEY,
@@ -94,10 +96,11 @@ class SQLiteRepository:
     def record_run(self, run: dict[str, Any]) -> int:
         with self._lock:
             cur = self._conn.execute(
-                "INSERT INTO runs (route_key, verdict, payload, created_at) "
-                "VALUES (?, ?, ?, ?)",
+                "INSERT INTO runs (route_key, user_id, verdict, payload, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
                 (
                     run.get("route_key", ""),
+                    run.get("user_id", "local"),
                     run.get("verdict"),
                     json.dumps(run, default=str),
                     _now(),
@@ -105,6 +108,14 @@ class SQLiteRepository:
             )
             self._conn.commit()
             return int(cur.lastrowid)
+
+    def runs_for_user(self, user_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT payload FROM runs WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+                (user_id, limit),
+            ).fetchall()
+        return [json.loads(r["payload"]) for r in rows]
 
     # --- user-scoped data -------------------------------------------------- #
     def get_user(self, user_id: str) -> Optional[User]:

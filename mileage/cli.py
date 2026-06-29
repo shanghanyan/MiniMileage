@@ -144,6 +144,7 @@ def run_quote(
         repo.record_run(
             {
                 "route_key": route.key(),
+                "user_id": user.user_id,
                 "verdict": verdict.label.value,
                 "currency": currency,
                 "miles_held": balance,
@@ -381,6 +382,106 @@ def run_demo_degrade(
     return 0
 
 
+def run_demo_multiuser(
+    registry: ProviderRegistry,
+    repo: Repository,
+    config: Config,
+) -> int:
+    """Phase 4 demo: two users, one route -> one scrape, both served from cache.
+
+    Proves the multi-user properties (§12 Phase 4): the hot cache and the global
+    quota counter are *shared*, so concurrent users on the same route trigger a
+    single set of live fetches; each user still sees a verdict computed against
+    *their own* balances (loaded from the Repository, never the request).
+    """
+    import threading
+
+    print("\n=== Phase 4 — multi-user + shared memory demo ===\n")
+    print(f"backend: {registry.cache.__class__.__name__} "
+          f"(stores={config.backend})")
+
+    # Two accounts persisted to the Repository — the only user-scoped data (§9).
+    alice = User(user_id="alice", balances={DEFAULT_CURRENCY: 30000}, card="venture_x")
+    bob = User(user_id="bob", balances={DEFAULT_CURRENCY: 90000}, card="venture_x")
+    repo.put_user(alice)
+    repo.put_user(bob)
+    print(f"seeded users: alice ({alice.balances[DEFAULT_CURRENCY]:,} {DEFAULT_CURRENCY}), "
+          f"bob ({bob.balances[DEFAULT_CURRENCY]:,} {DEFAULT_CURRENCY})")
+
+    # Both hit the SAME route/cabin so the cache keys collide.
+    route = Route("LAX", "IST", Cabin.BUSINESS)
+    results: dict[str, dict] = {}
+
+    def run_for(user: User) -> None:
+        loaded = repo.get_user(user.user_id) or user
+        results[user.user_id] = run_quote(
+            route, loaded, DEFAULT_CURRENCY,
+            registry=registry, repo=repo, config=config,
+        )
+
+    # Cold cache, then fire both users concurrently.
+    registry.cache.clear()
+    registry.reset_stats()
+    threads = [
+        threading.Thread(target=run_for, args=(alice,)),
+        threading.Thread(target=run_for, args=(bob,)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    stats = registry.stats
+    print("\n1) Concurrent requests, same route (LAX->IST business)")
+    print(f"   live fetches (cache misses): {stats.cache_misses}")
+    print(f"   served from shared cache (hits): {stats.cache_hits}")
+    print("   -> the second user's data came from cache, not a second scrape")
+
+    print("\n2) Global quota counter (shared across all users)")
+    for row in registry.provider_status():
+        if row["monthly_limit"] is not None and row["used"] > 0:
+            print(f"   {row['name']}: {row['used']}/{row['monthly_limit']} used this month")
+
+    print("\n3) Per-user verdicts from the SAME market data")
+    for uid in ("alice", "bob"):
+        res = results.get(uid)
+        if not res or res.get("verdict") is None:
+            print(f"   {uid}: no verdict")
+            continue
+        v: Verdict = res["verdict"]
+        bt = v.best_transfer
+        afford = ""
+        if bt is not None:
+            afford = "affordable" if bt.affordable else "needs more points"
+        held = res["user"].balances.get(DEFAULT_CURRENCY, 0)
+        print(f"   {uid:<6} {held:>7,} pts -> {v.label.value:<14} "
+              f"({afford or 'portal floor'})")
+
+    # Background job queue: warm another route off the request path (§9.4).
+    jobs = registry.stores.jobs if registry.stores else None
+    warm_route = Route("SFO", "NRT", Cabin.BUSINESS)
+    registry.reset_stats()
+    if jobs is not None:
+        jobs.submit(
+            run_quote, warm_route, bob, DEFAULT_CURRENCY,
+            registry=registry, repo=repo, config=config,
+            name="warm:SFO-NRT",
+        )
+        jobs.join(timeout=15.0)
+    warmed = registry.stats.cache_misses
+    registry.reset_stats()
+    run_quote(warm_route, bob, DEFAULT_CURRENCY,
+              registry=registry, repo=repo, config=config)
+    served = registry.stats.cache_hits
+    print("\n4) Background refresh (job queue warms cache off the request path)")
+    print(f"   worker pre-fetched SFO->NRT ({warmed} live fetches in the background)")
+    print(f"   a later request was served from the warm cache ({served} hits)")
+    print("   (worker pool now; a Redis list is the multi-worker swap, §9.4)")
+
+    print()
+    return 0
+
+
 def run_demo(registry: ProviderRegistry, repo: Repository, config: Config) -> int:
     for key in ("A", "B"):
         spec = DEMOS[key]
@@ -427,6 +528,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Phase 2: show cache hits, provider disable, quota fallback",
     )
 
+    sub.add_parser(
+        "demo-multiuser",
+        help="Phase 4: two users, one route -> one scrape, both served from cache",
+    )
+
     p = sub.add_parser("providers", help="provider federation status + quota")
     p.add_argument("--json", action="store_true")
 
@@ -471,6 +577,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         if args.command == "demo-degrade":
             return run_demo_degrade(registry, repo, config)
+
+        if args.command == "demo-multiuser":
+            return run_demo_multiuser(registry, repo, config)
 
         if args.command == "demo":
             return run_demo(registry, repo, config)

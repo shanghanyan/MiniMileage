@@ -67,17 +67,23 @@ class InProcRateLimiter:
 
 
 class ThreadLock:
-    """Process-local locks keyed by string. Redis SETNX replaces this later."""
+    """Process-local locks keyed by string. Redis SETNX replaces this later.
 
-    def __init__(self) -> None:
+    `acquire` blocks (up to `timeout`) so a concurrent request for the same key
+    *waits* for the in-flight fetch instead of skipping: the winner scrapes and
+    populates the cache, the waiter then reads it (one scrape, both served, §9).
+    """
+
+    def __init__(self, timeout: float = 30.0) -> None:
         self._locks: dict[str, threading.Lock] = {}
         self._guard = threading.Lock()
+        self._timeout = timeout
 
     @contextmanager
     def acquire(self, key: str) -> Iterator[bool]:
         with self._guard:
             lock = self._locks.setdefault(key, threading.Lock())
-        acquired = lock.acquire(blocking=False)
+        acquired = lock.acquire(blocking=True, timeout=self._timeout)
         try:
             yield acquired
         finally:

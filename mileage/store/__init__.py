@@ -13,16 +13,39 @@ multi-user move is an adapter swap, not a rewrite:
 
 from .cache import Cache, Lock, RateLimiter
 from .repo import Repository
+from .quota import QuotaGuard
 from .inproc import InProcCache, InProcRateLimiter, ThreadLock
-from .sqlite_repo import SQLiteRepository
+from .jobs import InProcJobQueue, Job, JobQueue
+from .sqlite_repo import SQLiteRepository, SqliteQuotaGuard
+from .stores import StoreBundle
+from .redis_impl import (
+    RedisCache,
+    RedisLock,
+    RedisQuotaGuard,
+    RedisRateLimiter,
+    RedisUnavailable,
+    redis_from_url,
+)
 
 __all__ = [
     "Cache",
     "Lock",
     "RateLimiter",
+    "QuotaGuard",
     "Repository",
     "InProcCache",
     "InProcRateLimiter",
     "ThreadLock",
+    "Job",
+    "JobQueue",
+    "InProcJobQueue",
     "SQLiteRepository",
+    "SqliteQuotaGuard",
+    "StoreBundle",
+    "RedisCache",
+    "RedisRateLimiter",
+    "RedisLock",
+    "RedisQuotaGuard",
+    "RedisUnavailable",
+    "redis_from_url",
 ]

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mileage"
 version = "0.0.0"
-description = "A points-to-flights optimizer. Phase 3: Capital One vertical slice with CLI, FastAPI, and React UI."
+description = "A points-to-flights optimizer. Phase 4: multi-user Capital One vertical slice with CLI, FastAPI, React UI, and a Redis-backed shared memory layer."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -24,6 +24,12 @@ aggregator = [
     "curl_cffi>=0.7",
     "feedparser>=6.0",
     "pdfplumber>=0.11",
+]
+
+# Phase 4 multi-user backend. Without it, MILEAGE_REDIS_URL gracefully falls
+# back to the in-process stores, so single-user/local runs need nothing extra.
+multiuser = [
+    "redis>=5.0",
 ]
 
 [project.scripts]

@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from ..cli import run_quote
-from ..config import Config, build_registry, build_repository
+from ..config import Config, build_registry, build_repository, build_stores
 from ..domain.models import Cabin, Route, User
 from ..serialize import quote_result_to_dict
 from .schemas import PipelineStep, RunStatus
@@ -30,15 +30,33 @@ class RunRecord:
     result: Optional[dict] = None
     error: Optional[str] = None
     message: Optional[str] = None
+    user_id: str = "local"
 
 
 class RunOrchestrator:
-    """In-process run store for Phase 3 single-user mode."""
+    """Run store + pipeline driver.
+
+    Phase 4: holds ONE shared repo + registry built on the process-shared
+    `StoreBundle`, so concurrent users on the same route hit a shared cache and
+    a single global quota counter (one scrape, both served) — rather than the
+    Phase 3 behavior of a fresh cache per run.
+    """
 
     def __init__(self, config: Optional[Config] = None) -> None:
         self.config = config or Config.from_env()
+        self._repo = build_repository(self.config)
+        self.stores = build_stores(self.config, self._repo)
+        self._registry = build_registry(self.config, self._repo, stores=self.stores)
         self._runs: dict[str, RunRecord] = {}
         self._lock = threading.Lock()
+
+    @property
+    def repo(self):
+        return self._repo
+
+    @property
+    def registry(self):
+        return self._registry
 
     def start(
         self,
@@ -49,7 +67,7 @@ class RunOrchestrator:
         on_complete: Optional[Callable[[RunRecord], None]] = None,
     ) -> RunRecord:
         run_id = uuid.uuid4().hex
-        record = RunRecord(run_id=run_id, status="running")
+        record = RunRecord(run_id=run_id, status="running", user_id=user.user_id)
         with self._lock:
             self._runs[run_id] = record
 
@@ -80,8 +98,6 @@ class RunOrchestrator:
         currency: str,
         on_complete: Optional[Callable[[RunRecord], None]],
     ) -> None:
-        repo = build_repository(self.config)
-        registry = build_registry(self.config, repo)
         try:
             self._set_step(run_id, "route")
 
@@ -92,8 +108,8 @@ class RunOrchestrator:
                 route,
                 user,
                 currency,
-                registry=registry,
-                repo=repo,
+                registry=self._registry,
+                repo=self._repo,
                 config=self.config,
                 on_step=on_step,
             )
@@ -118,8 +134,11 @@ class RunOrchestrator:
                 record.status = "error"
                 record.error = "pipeline_error"
                 record.message = str(exc)
-        finally:
-            repo.close()
+
+    def close(self) -> None:
+        if self.stores is not None:
+            self.stores.close()
+        self._repo.close()
 
 
 def request_to_route(req) -> Route:

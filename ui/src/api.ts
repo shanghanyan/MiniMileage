@@ -2,6 +2,25 @@ import type { RedemptionRequest, RunStatusResponse } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
+// Phase 4 (multi-user): when the API runs with MILEAGE_AUTH=1, the bearer token
+// IS the user id. Pick it up from ?token=alice or VITE_API_TOKEN so the same UI
+// can act as different users (open two tabs to see per-user verdicts). When auth
+// is off (the default), this is simply absent and the server uses "local".
+function authToken(): string | null {
+  try {
+    const fromUrl = new URLSearchParams(window.location.search).get("token");
+    if (fromUrl) return fromUrl;
+  } catch {
+    /* non-browser / SSR */
+  }
+  return (import.meta.env.VITE_API_TOKEN as string | undefined) ?? null;
+}
+
+function authHeaders(): Record<string, string> {
+  const token = authToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export async function checkHealth(): Promise<boolean> {
   try {
     const res = await fetch(`${API_BASE}/health`, {
@@ -41,7 +60,7 @@ export async function startRedemption(
 ): Promise<{ run_id: string }> {
   const res = await apiFetch(`${API_BASE}/redemptions`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(req),
   });
   if (!res.ok) {
@@ -51,7 +70,9 @@ export async function startRedemption(
 }
 
 export async function getRunStatus(runId: string): Promise<RunStatusResponse> {
-  const res = await apiFetch(`${API_BASE}/status/${runId}`);
+  const res = await apiFetch(`${API_BASE}/status/${runId}`, {
+    headers: { ...authHeaders() },
+  });
   if (!res.ok) {
     throw new Error(`Failed to fetch status (${res.status})`);
   }

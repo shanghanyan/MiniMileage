@@ -16,7 +16,9 @@ class RedemptionRequest(BaseModel):
     dest: str = Field(..., min_length=3, max_length=3, examples=["IST"])
     cabin: Literal["economy", "premium_economy", "business", "first"] = "economy"
     currency: str = "capital_one"
-    miles: int = Field(..., ge=0, examples=[90000])
+    # Optional when authenticated: balances come from the user's account, not
+    # the request body. Required for anonymous/single-user requests.
+    miles: Optional[int] = Field(default=None, ge=0, examples=[90000])
     card: Literal["venture", "venture_x"] = "venture_x"
 
 
@@ -24,6 +26,20 @@ class RedemptionResponse(BaseModel):
     run_id: str
     status: RunStatus
     step: PipelineStep
+    user_id: str = "local"
+
+
+class UserProfile(BaseModel):
+    user_id: str
+    card: str = "venture_x"
+    balances: dict[str, int] = Field(default_factory=dict)
+    preferences: dict[str, str] = Field(default_factory=dict)
+
+
+class UpsertUserRequest(BaseModel):
+    card: Literal["venture", "venture_x"] = "venture_x"
+    balances: dict[str, int] = Field(default_factory=dict)
+    preferences: dict[str, str] = Field(default_factory=dict)
 
 
 class RunStatusResponse(BaseModel):

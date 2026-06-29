@@ -303,10 +303,10 @@ Both demos run end-to-end from Phase 0 onward; each phase makes them *more* trus
 **Deliverable:** the beige web app over the working pipeline, locally (`:5173` → `:8000`).
 **Demo:** both demos run **in the browser** — watch the stepper go Route → Gathering → Cross-check → Redemptions; Demo B lights the single gold "best verified route" line, Demo A shows the calm "portal is your floor" verdict.
 
-### Phase 4 — Multi-user + memory layer (Redis lands here)
-**Build:** swap `Cache`/`RateLimiter`/`Lock` to **Redis/Upstash**; `Repository` to **Turso/Supabase**; add auth (Supabase Auth/Clerk) and per-user balances/card holdings; background scrape workers + job queue.
-**Deliverable:** a hosted, multi-user service — shared market-data cache, **global quota counter shared across all users**, no double-scraping, results scoped to each user's cards.
-**Demo:** two users hit `LAX→JFK` concurrently → **one scrape, both served from cache**; the global quota counter is visibly shared; each user sees the verdict computed against *their own* balances (e.g. one has 20k C1 → `portal_only`; the other has 90k C1 → `best` via Turkish).
+### Phase 4 — Multi-user + memory layer (Redis lands here) — ✅ SHIPPED
+**Build:** swap `Cache`/`RateLimiter`/`Lock`/`QuotaGuard` to **Redis/Upstash** behind one `StoreBundle` (`store/stores.py`, `store/redis_impl.py`); add bearer auth (`api/auth.py`; Supabase Auth/Clerk are the production swap) and per-user balances/card holdings loaded from the `Repository`; background scrape workers + job queue (`store/jobs.py`). The API now holds **one shared registry**, and the registry populates the cache *inside* its de-dupe lock so a concurrent waiter reads cache instead of double-scraping.
+**Deliverable:** a multi-user-ready service — shared market-data cache, **global quota counter shared across all users**, no double-scraping, results scoped to each user's cards. `MILEAGE_REDIS_URL` selects the Redis backend (graceful fallback to in-proc if unreachable); `Repository` stays SQLite behind the same interface (Turso/Supabase is the hosting swap, no caller changes).
+**Demo (`mileage demo-multiuser`):** two users hit `LAX→IST` concurrently → **one scrape, both served from cache** (4 live fetches + 4 cache hits); the global quota counter is charged once; each user sees the verdict computed against *their own* balances (alice 30k C1 → `portal_only`; bob 90k C1 → `best` via Turkish). Covered by `tests/test_phase4.py`.
 
 ### Phase 5 — Observability + evals
 **Build:** Phoenix OTel tracing (spans = episode log); golden route set (Demo A + Demo B + extras) as CI evals; optional Grafana for ops metrics.

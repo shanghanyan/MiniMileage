@@ -7,10 +7,12 @@ one transferable currency end-to-end (**Capital One → Star Alliance partners �
 award space**), CLI-only, single-user, no web stack, no "Brain".
 
 **Phases shipped: 0 (vertical slice) + 1 (Aggregator / Engine A) + 2 (federation
-hardening) + 3 (UI + API).** Award space is real scraped data; the provider
-registry enforces quota guards, 2-day cache cadence, and ordered fallbacks.
-The beige web app runs the same pipeline as the CLI via FastAPI. See
-`Cursor-Mileage-Plan.md` for the full staged architecture.
+hardening) + 3 (UI + API) + 4 (multi-user + shared memory layer).** Award space
+is real scraped data; the provider registry enforces quota guards, 2-day cache
+cadence, and ordered fallbacks. The beige web app runs the same pipeline as the
+CLI via FastAPI. The memory layer is swappable to Redis/Upstash for a hosted,
+multi-user service with a shared cache, a global quota counter, and per-user
+balances. See `Cursor-Mileage-Plan.md` for the full staged architecture.
 
 ## What Phase 0 does
 
@@ -124,6 +126,63 @@ for the gold-highlighted best transfer path.
 python tests/test_phase3.py
 ```
 
+## What Phase 4 adds — multi-user + shared memory layer
+
+The Phase 0 storage seams (`Cache` / `RateLimiter` / `Lock` / `QuotaGuard`) are
+now assembled into one swappable `StoreBundle` (`store/stores.py`) and the API
+holds **one shared registry** for its lifetime. That single change makes the
+multi-user properties real (§9):
+
+- **Shared hot cache** — most market data (charts, ratios, fares, award space)
+  is user-independent, so one user's lookup serves the rest. Concurrent users on
+  the same route trigger **one scrape, both served from cache** (the registry
+  populates the cache *inside* the de-dupe lock; a concurrent waiter reads it
+  instead of re-scraping).
+- **Global quota counter** — the free-tier budget caps *your key* across *all*
+  users, so the counter is charged once per live fetch, not once per user.
+- **Per-user balances** — `balances`, `card`, and `preferences` are the only
+  user-scoped data; they live in the `Repository` and verdicts are computed
+  against *each user's own* holdings, never the request body.
+- **Bearer auth** (`api/auth.py`) — with `MILEAGE_AUTH=1` the bearer token is
+  the user id and balances are loaded server-side (Supabase Auth / Clerk are the
+  production swap; both ultimately hand the backend a verified user id).
+- **Background job queue** (`store/jobs.py`) — a worker pool warms the shared
+  cache off the request path.
+- **Redis/Upstash backend** (`store/redis_impl.py`) — `RedisCache`,
+  `RedisRateLimiter` (atomic token-bucket Lua), `RedisLock` (`SETNX` + wait),
+  and `RedisQuotaGuard` (atomic global counter). It's an **adapter swap, not a
+  rewrite**: set `MILEAGE_REDIS_URL` and the same callers use Redis. If the
+  server is unreachable, it logs and falls back to the in-process stores, so
+  local runs need nothing extra.
+
+```bash
+# Phase 4 demo: two users, one route -> one scrape, both served from cache,
+# shared global quota counter, and per-user verdicts (alice 30k -> portal_only,
+# bob 90k -> best via Turkish).
+python -m mileage.cli demo-multiuser
+
+# Multi-user API: bearer token = user id; balances loaded server-side.
+MILEAGE_AUTH=1 uvicorn mileage.api.app:app --port 8000
+curl -X PUT localhost:8000/users/bob \
+  -H 'content-type: application/json' \
+  -d '{"card":"venture_x","balances":{"capital_one":90000}}'
+curl -X POST localhost:8000/redemptions \
+  -H 'authorization: Bearer bob' -H 'content-type: application/json' \
+  -d '{"origin":"LAX","dest":"IST","cabin":"business"}'
+
+# Swap the memory layer to Redis/Upstash (optional; graceful fallback if down).
+pip install -e .[multiuser]
+MILEAGE_REDIS_URL=redis://localhost:6379/0 python -m mileage.cli demo-multiuser
+
+# Phase 4 tests (Redis adapters exercised via fakeredis if installed)
+python tests/test_phase4.py
+```
+
+In the browser, the UI picks up an optional `?token=alice` query param (or
+`VITE_API_TOKEN`) and sends it as a bearer token — open two tabs with
+`?token=alice` and `?token=bob` against an `MILEAGE_AUTH=1` API to watch each
+user get a verdict against their own balances.
+
 ## Install
 
 ```bash
@@ -165,8 +224,12 @@ mileage/
   verify/      # crosscheck, trust, freshness, bounds
   graph/       # NetworkX CPP-by-product model + ranking
   store/       # Repository (SQLite) + quota guard + Cache/RateLimiter/Lock
+    stores.py    # StoreBundle: the swappable memory layer, assembled in one place
+    inproc.py    # in-process impls (Phase 0-3 default)
+    redis_impl.py # Redis/Upstash impls (Phase 4 multi-user)
+    jobs.py      # background job queue (off-request scrape refresh)
   knowledge/   # ratios, charts, fares, sources, providers, travelpayouts_cache
-  api/         # FastAPI orchestrator (Phase 3)
+  api/         # FastAPI orchestrator (Phase 3) + bearer auth (Phase 4)
   cli.py  config.py  serialize.py
 ui/            # Vite + React web app (Phase 3)
 ```

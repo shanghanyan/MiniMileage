@@ -14,11 +14,12 @@ free (§5 cadence: ~2 days -> ~15 calls/route/month).
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass, field
 from typing import Optional
 
 from ..domain.models import Layer
-from ..store.cache import Cache, RateLimiter
+from ..store.cache import Cache, Lock, RateLimiter
 from ..store.inproc import InProcCache, InProcRateLimiter, ThreadLock
 from ..store.quota import QuotaGuard
 from .base import Provider, ProviderHealth, Query, Quote
@@ -58,9 +59,11 @@ class ProviderRegistry:
         cache: Optional[Cache] = None,
         rate_limiter: Optional[RateLimiter] = None,
         quota: Optional[QuotaGuard] = None,
+        lock: Optional[Lock] = None,
         federation: Optional[FederationConfig] = None,
         ttl_seconds: float = DEFAULT_TTL_SECONDS,
         disabled: Optional[set[str]] = None,
+        stores: object = None,
     ) -> None:
         self._providers: list[Provider] = []
         self.cache: Cache = cache or InProcCache()
@@ -69,8 +72,16 @@ class ProviderRegistry:
         self.federation: Optional[FederationConfig] = federation
         self.ttl_seconds = ttl_seconds
         self.disabled: set[str] = disabled or set()
-        self._lock = ThreadLock()
+        # The memory-layer bundle (cache/limiter/lock/quota/jobs), if assembled
+        # via build_registry. Exposes the background job queue to callers (§9.4).
+        self.stores = stores
+        # Coordination across concurrent fetches; shared (Redis SETNX) in
+        # multi-user mode so two users on the same route don't both scrape (§9).
+        self._lock: Lock = lock or ThreadLock()
         self._stats = RegistryStats()
+        # Stats are updated from multiple worker threads (concurrent users);
+        # guard the counters so they don't lose increments under contention.
+        self._stats_lock = threading.Lock()
         for p in providers or []:
             self.register(p)
 
@@ -125,22 +136,23 @@ class ProviderRegistry:
         skip_reason: Optional[str] = None,
         quotes: int = 0,
     ) -> None:
-        if cache_hit:
-            self._stats.cache_hits += 1
-        elif not skipped:
-            self._stats.cache_misses += 1
-        if skip_reason == "quota":
-            self._stats.quota_skips += 1
-        self._stats.events.append(
-            FetchEvent(
-                provider=provider,
-                layer=layer.value,
-                cache_hit=cache_hit,
-                skipped=skipped,
-                skip_reason=skip_reason,
-                quotes=quotes,
+        with self._stats_lock:
+            if cache_hit:
+                self._stats.cache_hits += 1
+            elif not skipped:
+                self._stats.cache_misses += 1
+            if skip_reason == "quota":
+                self._stats.quota_skips += 1
+            self._stats.events.append(
+                FetchEvent(
+                    provider=provider,
+                    layer=layer.value,
+                    cache_hit=cache_hit,
+                    skipped=skipped,
+                    skip_reason=skip_reason,
+                    quotes=quotes,
+                )
             )
-        )
 
     def _fetch_one(self, provider: Provider, q: Query) -> list[Quote]:
         key = self._cache_key(provider, q)
@@ -203,13 +215,14 @@ class ProviderRegistry:
                 )
                 return []
 
-        # Consume quota only on a live fetch (cache miss that returned).
-        if self.quota is not None:
-            self.quota.consume(provider.name, 1)
-
-        self.cache.set(key, quotes, ttl_seconds=self.ttl_seconds)
-        self._record(provider.name, q.layer, quotes=len(quotes))
-        return quotes
+            # Populate cache + consume quota *inside* the lock so a concurrent
+            # waiter sees the result on its post-lock re-check and is served from
+            # cache instead of double-scraping (§9: one scrape, both served).
+            if self.quota is not None:
+                self.quota.consume(provider.name, 1)
+            self.cache.set(key, quotes, ttl_seconds=self.ttl_seconds)
+            self._record(provider.name, q.layer, quotes=len(quotes))
+            return quotes
 
     def fetch(self, q: Query) -> list[Quote]:
         """Federate one query across all providers serving its layer."""
