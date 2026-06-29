@@ -2,10 +2,44 @@ import type { RedemptionRequest, RunStatusResponse } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
+export async function checkHealth(): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/health`, {
+      method: "GET",
+      cache: "no-store",
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export class ApiConnectionError extends Error {
+  constructor(message = "Cannot reach the Mileage API.") {
+    super(message);
+    this.name = "ApiConnectionError";
+  }
+}
+
+async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (err) {
+    if (
+      err instanceof TypeError ||
+      (err instanceof Error &&
+        /failed to fetch|network|load failed/i.test(err.message))
+    ) {
+      throw new ApiConnectionError();
+    }
+    throw err;
+  }
+}
+
 export async function startRedemption(
   req: RedemptionRequest,
 ): Promise<{ run_id: string }> {
-  const res = await fetch(`${API_BASE}/redemptions`, {
+  const res = await apiFetch(`${API_BASE}/redemptions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
@@ -17,7 +51,7 @@ export async function startRedemption(
 }
 
 export async function getRunStatus(runId: string): Promise<RunStatusResponse> {
-  const res = await fetch(`${API_BASE}/status/${runId}`);
+  const res = await apiFetch(`${API_BASE}/status/${runId}`);
   if (!res.ok) {
     throw new Error(`Failed to fetch status (${res.status})`);
   }
@@ -30,7 +64,13 @@ export async function pollUntilComplete(
   intervalMs = 400,
 ): Promise<RunStatusResponse> {
   for (;;) {
-    const status = await getRunStatus(runId);
+    let status: RunStatusResponse;
+    try {
+      status = await getRunStatus(runId);
+    } catch (err) {
+      if (err instanceof ApiConnectionError) throw err;
+      throw err;
+    }
     onProgress(status);
     if (status.status === "complete" || status.status === "error") {
       return status;

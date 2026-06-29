@@ -10,9 +10,40 @@
       href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
+    <style>
+      .boot-fallback {
+        margin: 0;
+        min-height: 100vh;
+        background: #f5f2e8;
+        color: #2e2117;
+        font-family: Inter, system-ui, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        text-align: center;
+      }
+      .boot-fallback h1 {
+        font-family: Fraunces, serif;
+        font-size: clamp(48px, 12vw, 96px);
+        margin: 0 0 12px;
+        font-weight: 400;
+      }
+      .boot-fallback p {
+        color: #6b5a48;
+        max-width: 36ch;
+        line-height: 1.5;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="boot-fallback" lang="en">
+        <h1>Mileage</h1>
+        <p>Loading…</p>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
