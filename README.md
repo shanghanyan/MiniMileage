@@ -7,8 +7,9 @@ one transferable currency end-to-end (**Capital One → Star Alliance partners �
 award space**), CLI-only, single-user, no web stack, no "Brain".
 
 **Phases shipped: 0 (vertical slice) + 1 (Aggregator / Engine A) + 2 (federation
-hardening).** Award space is real scraped data; the provider registry now
-enforces quota guards, 2-day cache cadence, and ordered fallbacks. See
+hardening) + 3 (UI + API).** Award space is real scraped data; the provider
+registry enforces quota guards, 2-day cache cadence, and ordered fallbacks.
+The beige web app runs the same pipeline as the CLI via FastAPI. See
 `Cursor-Mileage-Plan.md` for the full staged architecture.
 
 ## What Phase 0 does
@@ -94,6 +95,35 @@ python -m mileage.cli sources --validate-urls
 python -m mileage.cli sources --validate-urls --force
 ```
 
+## What Phase 3 adds — UI + API (single-user)
+
+FastAPI orchestrator exposing the real pipeline to the beige web app:
+
+- **`POST /redemptions`** — start a quote run; returns `run_id`.
+- **`GET /status/{run_id}`** — poll pipeline progress through the 4 steps
+  (Route → Gathering → Cross-check → Redemptions) and fetch the verdict.
+- **`GET /freshness`** — provider health, cache TTL, and aggregator source checks.
+
+The Vite/React app in `ui/` mirrors `mileage-ui-mockup.html` and polls the API.
+Demo A and Demo B presets run in the browser with the same honesty rules as the CLI.
+
+```bash
+# Terminal 1 — API on :8000
+pip install -e .
+uvicorn mileage.api.app:app --reload --port 8000
+
+# Terminal 2 — UI on :5173 (proxies to :8000)
+cd ui && npm install && npm run dev
+```
+
+Open http://localhost:5173 — use **Demo A** for the portal floor verdict, **Demo B**
+for the gold-highlighted best transfer path.
+
+```bash
+# Phase 3 API tests
+python tests/test_phase3.py
+```
+
 ## Install
 
 ```bash
@@ -136,7 +166,9 @@ mileage/
   graph/       # NetworkX CPP-by-product model + ranking
   store/       # Repository (SQLite) + quota guard + Cache/RateLimiter/Lock
   knowledge/   # ratios, charts, fares, sources, providers, travelpayouts_cache
-  cli.py  config.py
+  api/         # FastAPI orchestrator (Phase 3)
+  cli.py  config.py  serialize.py
+ui/            # Vite + React web app (Phase 3)
 ```
 
 `domain/` and `verify/` never import from `providers/`. The storage interfaces

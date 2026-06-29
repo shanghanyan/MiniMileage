@@ -1,5 +1,6 @@
-# Mileage — Phase 0 dependencies (CLI vertical slice, no web, no Brain)
-# Pin to currently-available stable majors; bump as needed.
+# Mileage — Phase 0–3 dependencies
 PyYAML>=6.0,<7.0
 networkx>=3.0,<4.0
 httpx>=0.27,<1.0
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.32,<1.0

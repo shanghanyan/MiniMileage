@@ -16,7 +16,7 @@ import argparse
 import json
 import logging
 import sys
-from typing import Optional
+from typing import Callable, Literal, Optional
 
 from .config import (
     Config,
@@ -41,6 +41,7 @@ from .domain.verdict import conclude_winner
 from .graph.build import build_graph
 from .graph.optimize import rank_paths
 from .providers.base import Query
+from .serialize import quote_result_to_dict
 from .providers.registry import ProviderRegistry
 from .store.repo import Repository
 from .verify.crosscheck import verify_award_quotes, verify_fare
@@ -49,6 +50,9 @@ from .verify.crosscheck import verify_award_quotes, verify_fare
 # --------------------------------------------------------------------------- #
 # Orchestration: query -> providers -> verify -> graph -> conclude (§3)
 # --------------------------------------------------------------------------- #
+PipelineStep = Literal["route", "gathering", "crosscheck", "redemptions"]
+
+
 def run_quote(
     route: Route,
     user: User,
@@ -57,9 +61,16 @@ def run_quote(
     registry: ProviderRegistry,
     repo: Optional[Repository] = None,
     config: Optional[Config] = None,
+    on_step: Optional[Callable[[PipelineStep], None]] = None,
 ) -> dict:
     config = config or Config.from_env()
     balance = user.balances.get(currency, 0)
+
+    if on_step:
+        on_step("route")
+
+    if on_step:
+        on_step("gathering")
 
     # L2 cash fare — the price-to-beat.
     fare_quotes = [
@@ -67,7 +78,6 @@ def run_quote(
         for q in registry.fetch(Query(route, Layer.FARES, currency))
         if isinstance(q, FareQuote)
     ]
-    vfare = verify_fare(fare_quotes)
 
     programs = partner_programs(config)
 
@@ -85,7 +95,14 @@ def run_quote(
         for q in registry.fetch(Query(route, Layer.AWARD, currency, programs=programs))
         if isinstance(q, AwardQuote)
     ]
+    if on_step:
+        on_step("crosscheck")
+
+    vfare = verify_fare(fare_quotes)
     vawards = verify_award_quotes(award_quotes)
+
+    if on_step:
+        on_step("redemptions")
 
     if vfare is None:
         return {
@@ -205,33 +222,6 @@ def render(result: dict) -> str:
     lines.append("  " + "-" * 64)
     lines.append("  (* best affordable transfer   # portal floor wins)")
     return "\n".join(lines)
-
-
-def _verdict_to_jsonable(result: dict) -> dict:
-    route: Route = result["route"]
-    out: dict = {"route": route.key()}
-    verdict: Optional[Verdict] = result.get("verdict")
-    if verdict is None:
-        out["error"] = result.get("error")
-        out["message"] = result.get("message")
-        return out
-    out["verdict"] = verdict.label.value
-    out["rationale"] = verdict.rationale
-    out["flags"] = verdict.flags
-    out["fare_cents"] = result["fare"].cash_cents
-    out["options"] = [
-        {
-            "label": o.label,
-            "kind": o.kind,
-            "cpp": o.cpp,
-            "source_points": o.source_points,
-            "affordable": o.affordable,
-            "confidence": o.confidence,
-            "flags": o.flags,
-        }
-        for o in verdict.options
-    ]
-    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -495,7 +485,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 registry=registry, repo=repo, config=config,
             )
             if args.json:
-                print(json.dumps(_verdict_to_jsonable(result), indent=2))
+                print(json.dumps(quote_result_to_dict(result), indent=2))
             else:
                 print(render(result))
             return 0
