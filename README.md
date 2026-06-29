@@ -2,11 +2,14 @@
 
 A points-to-flights optimizer. North star: an "Expedia for points" that, across
 many cards and programs, tells you how to convert miles into the right seat —
-cheapest, fastest, most comfortable. This repo is the **Phase 0 vertical slice**:
+cheapest, fastest, most comfortable. This repo is the working vertical slice:
 one transferable currency end-to-end (**Capital One → Star Alliance partners →
-award charts**), CLI-only, single-user, no web stack, no scraper, no "Brain".
+award space**), CLI-only, single-user, no web stack, no "Brain".
 
-See `Cursor-Mileage-Plan.md` for the full staged architecture.
+**Phases shipped: 0 (vertical slice) + 1 (the Aggregator / Engine A).** Award
+space is now real scraped data, normalized to the same `AwardQuote` contract as
+every API provider. See `Cursor-Mileage-Plan.md` for the full staged
+architecture.
 
 ## What Phase 0 does
 
@@ -20,7 +23,44 @@ with provenance and confidence:
 It is built to be **honest**: a datum enters the graph only with verifiable
 provenance (no hallucinations), and "just use your portal" is a valid answer.
 
-The verification / provenance / verdict skeleton is real and working; the data feeding it (cash fares and award space) is still stubbed and flagged as such.
+The verification / provenance / verdict skeleton is real and working. As of
+Phase 1, **award space is real scraped data** (see below); cash fares come from
+Amadeus when a key is set, otherwise a curated fallback flagged as such.
+
+## What Phase 1 adds — the Aggregator (Engine A)
+
+Engine A is the **default Layer 3 (award space) + Layer 4 (charts) source**. It
+is a real scraper, not a stub:
+
+- **Resilient fetch stack** (`providers/aggregator/fetch.py`): `httpx` for plain
+  pages, optional `curl_cffi` TLS/JA4 impersonation, and a **Wayback Machine**
+  snapshot fallback on `403/429/5xx`/network error. `file://` targets are served
+  from disk so the *same* parse path runs offline and deterministically.
+- **Adaptive politeness** (`politeness.py`): a per-domain throttle that backs off
+  on `429` and recovers on `200`, with jitter and source rotation. Scheduling
+  efficiency, not evasion; behind an interface so the Phase 4 Redis-shared
+  limiter is an adapter swap.
+- **Parsers** (`parse.py`): HTML tables, JSON award-space, and RSS feeds → one
+  normalized row shape. A datum is produced **only when a selector actually
+  hits** (anti-hallucination, §2.1).
+- **Targets** (`knowledge/sources.yaml` + `knowledge/fixtures/`): an ordered,
+  trust-weighted list. The seeded `file://` fixtures stand in for public pages;
+  swapping one for a real `https://` URL is a config change, not a code change.
+- **Carried-over fixes:** round-trip→one-way normalization, freshness de-dupe,
+  `--validate-urls` + `last_404` URL-rot health check, and trust-weighted
+  cross-check across genuinely independent sources.
+
+Because scraped quotes carry their own provenance, the verification core now has
+**independent sources to cross-check**, and **live award space takes precedence
+over static charts** (§2.5): a confirmed seat clears the `no_live_space` caveat.
+
+```bash
+# Inspect Engine A's targets and run the URL-rot health check
+python -m mileage.cli sources --validate-urls
+
+# Fall back to curated-only (Engine A off) — graceful degradation
+MILEAGE_NO_AGGREGATOR=1 python -m mileage.cli demo
+```
 
 ## Install
 
@@ -39,7 +79,7 @@ python -m mileage.cli demo
 python -m mileage.cli quote --from LAX --to JFK --cabin economy \
     --currency capital_one --miles 20000 --card venture_x
 
-# Demo B — value: expect best, flagged no_live_space
+# Demo B — value: expect best, with verified live award space (seats shown)
 python -m mileage.cli quote --from LAX --to IST --cabin business \
     --currency capital_one --miles 90000 --card venture_x
 
@@ -56,9 +96,9 @@ fares in `mileage/knowledge/fares.yaml` are used (flagged `hardcoded_fallback`).
 ```
 mileage/
   domain/      # pure, no I/O: models, ratios, charts, cpp, verdict
-  providers/   # one interface, many sources; curated (default) + amadeus + stubs
-    aggregator/  # Engine A — Phase 1 placeholder
-    brain/       # Engine B — QUARANTINED, empty in Phase 0
+  providers/   # one interface, many sources; aggregator + curated + amadeus + stubs
+    aggregator/  # Engine A — real scraper (fetch + politeness + parse + sources)
+    brain/       # Engine B — QUARANTINED, empty
   verify/      # crosscheck, trust, freshness, bounds (no-hallucination rules)
   graph/       # NetworkX CPP-by-product model + ranking
   store/       # Repository (SQLite) + Cache/RateLimiter/Lock interfaces

@@ -68,12 +68,22 @@ def run_quote(
     ]
     vfare = verify_fare(fare_quotes)
 
+    programs = partner_programs(config)
+
     # L4 ratios + chart-derived award costs.
     chart_quotes = registry.fetch(
-        Query(route, Layer.CHARTS, currency, programs=partner_programs(config))
+        Query(route, Layer.CHARTS, currency, programs=programs)
     )
     ratios = [q for q in chart_quotes if isinstance(q, TransferRatio)]
     award_quotes = [q for q in chart_quotes if isinstance(q, AwardQuote)]
+
+    # L3 live award space (Engine A / seats.aero). Pooled with chart quotes so
+    # the verification core applies live precedence + cross-check (§2.5, §7).
+    award_quotes += [
+        q
+        for q in registry.fetch(Query(route, Layer.AWARD, currency, programs=programs))
+        if isinstance(q, AwardQuote)
+    ]
     vawards = verify_award_quotes(award_quotes)
 
     if vfare is None:
@@ -163,6 +173,15 @@ def render(result: dict) -> str:
     lines.append(f"  Price to beat: ${fare.cash_cents / 100:,.0f} "
                  f"[{', '.join(fare.flags) or 'live'}] "
                  f"conf={fare.confidence:.2f}")
+    awards = result.get("awards") or []
+    live = [a for a in awards if a.seats_available is not None]
+    if live:
+        seat_bits = ", ".join(
+            f"{a.program} {a.miles:,}mi ({a.seats_available} seats)" for a in live
+        )
+        lines.append(f"  Live award space: {seat_bits}")
+    elif awards:
+        lines.append(f"  Award space: chart-only (no live seat) — {len(awards)} program(s)")
     lines.append("")
     lines.append(f"  VERDICT: {verdict.label.value}  —  {_LABEL_BLURB[verdict.label]}")
     lines.append(f"  {verdict.rationale}")
@@ -230,9 +249,36 @@ DEMOS = {
         "route": ("LAX", "IST", "business"),
         "miles": 90000,
         "card": "venture_x",
-        "expect": "best (flagged no_live_space)",
+        "expect": "best (live award space verified)",
     },
 }
+
+
+def run_sources(config: Config, *, validate: bool = False) -> int:
+    """List the aggregator's targets; optionally run the URL-rot health check."""
+    from .providers.aggregator import AggregatorProvider
+
+    agg = AggregatorProvider(
+        sources_path=config.sources_path,
+        knowledge_dir=config.knowledge_dir,
+        enabled=config.aggregator_enabled,
+    )
+    if validate:
+        agg.validate_urls()
+    print(f"Engine A targets ({len(agg.targets)})  ·  provider health: "
+          f"{agg.health().value}")
+    print("-" * 68)
+    for t in agg.targets:
+        status = ""
+        if validate:
+            mark = "ok" if t.healthy() else "DEAD"
+            status = f"  [{mark} status={t.last_status} last_404={t.last_404}]"
+        print(
+            f"  {t.trust:.2f}  {t.provides:<6} {t.format:<10} {t.name}{status}"
+        )
+        print(f"            {t.url}")
+    print("-" * 68)
+    return 0
 
 
 def run_demo(registry: ProviderRegistry, repo: Repository, config: Config) -> int:
@@ -275,6 +321,13 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--json", action="store_true", help="machine-readable output")
 
     sub.add_parser("demo", help="run Demo A and Demo B side by side")
+
+    s = sub.add_parser("sources", help="list aggregator targets (Engine A)")
+    s.add_argument(
+        "--validate-urls",
+        action="store_true",
+        help="probe each target and report status / last_404 (URL-rot health check)",
+    )
     return parser
 
 
@@ -289,6 +342,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     repo = build_repository(config)
 
     try:
+        if args.command == "sources":
+            return run_sources(config, validate=args.validate_urls)
+
         if args.command == "demo":
             return run_demo(registry, repo, config)
 

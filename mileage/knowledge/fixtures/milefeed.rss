@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  FIXTURE — stands in for a public award-availability RSS feed (§6). Each item
+  carries a structured <mileage:data> JSON payload so a real feed reader and our
+  parser agree on the datum (no prose scraping). This is a SECOND, independent
+  live source for the Turkish LAX->IST business seat, enabling a genuine
+  cross-check (§7 step 2) rather than two mirrors of one chart.
+-->
+<rss version="2.0" xmlns:mileage="https://example.org/mileage/ns">
+  <channel>
+    <title>MileFeed — award space alerts</title>
+    <link>https://example.org/milefeed</link>
+    <description>Recent saver award space across Star Alliance partners.</description>
+    <item>
+      <title>Turkish business space LAX-IST</title>
+      <pubDate>Wed, 24 Jun 2026 09:00:00 +0000</pubDate>
+      <mileage:data>{"kind": "award", "program": "turkish", "origin": "LAX", "dest": "IST", "cabin": "business", "miles": 46000, "seats": 1, "roundtrip": false, "updated_at": "2026-06-24"}</mileage:data>
+    </item>
+    <item>
+      <title>LifeMiles transcon economy LAX-JFK</title>
+      <pubDate>Tue, 23 Jun 2026 18:30:00 +0000</pubDate>
+      <mileage:data>{"kind": "award", "program": "lifemiles", "origin": "LAX", "dest": "JFK", "cabin": "economy", "miles": 12500, "seats": 3, "roundtrip": false, "updated_at": "2026-06-23"}</mileage:data>
+    </item>
+  </channel>
+</rss>

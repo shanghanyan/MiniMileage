@@ -1,31 +1,44 @@
 # Aggregator (Engine A) target list — ordered, trust-weighted (§6).
 #
-# NOT USED IN PHASE 0 (the aggregator lands in Phase 1). Seeded here so the
-# scaffold is complete and the Phase 1 scraper has a starting target chain.
-# Only PUBLIC, non-WAF'd sources belong here; anything behind a heavy WAF is the
+# PHASE 1: this list is live. The aggregator fetches each target, parses it, and
+# emits normalized AwardQuotes (same contract as every API provider). Only
+# PUBLIC, non-WAF'd sources belong here; anything behind a heavy WAF is the
 # Brain's (Engine B) problem and is quarantined (§8).
+#
+# The `file://` URLs below point at knowledge/fixtures/*, which stand in for
+# public pages so the slice runs offline and deterministically. Swapping a
+# `file://` target for a real `https://` one is a CONFIG change, not a code
+# change — the fetch/parse path is identical.
+#
+# Target schema:
+#   name      unique source id (becomes the provenance source_name)
+#   url       file:// (relative to this dir) or http(s)://
+#   format    html_table | json | rss | pdf
+#   provides  chart  (L4, no live seat -> no_live_space)
+#             award  (L3, live seat -> seats_available set)
+#   trust     [0,1] weight used for rotation order + cross-check median
+#   layers    informational tags
 
 targets:
-  - name: awardtravelfinder
-    url: https://awardtravelfinder.example/charts
-    kind: aggregator
-    trust: 0.6
-    layers: [charts, award]
+  - name: starnet-award-space
+    url: file://fixtures/starnet_award_space.json
+    format: json
+    provides: award
+    trust: 0.70
+    updated_at: "2026-06-24"
+    layers: [award]
 
-  - name: 10xtravel-charts
-    url: https://10xtravel.example/award-charts
-    kind: blog
-    trust: 0.55
+  - name: awardatlas-charts
+    url: file://fixtures/awardatlas_charts.html
+    format: html_table
+    provides: chart
+    trust: 0.60
+    updated_at: "2026-06-18"
     layers: [charts]
 
-  - name: aeroplan-chart-pdf
-    url: https://aircanada.example/aeroplan-chart.pdf
-    kind: pdf
-    trust: 0.65
-    layers: [charts]
-
-  - name: award-rss
-    url: https://awardfeeds.example/rss
-    kind: rss
-    trust: 0.4
-    layers: [charts, award]
+  - name: milefeed-rss
+    url: file://fixtures/milefeed.rss
+    format: rss
+    provides: award
+    trust: 0.45
+    layers: [award]

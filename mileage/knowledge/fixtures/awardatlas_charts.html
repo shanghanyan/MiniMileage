@@ -1,0 +1,29 @@
+<!--
+  FIXTURE — stands in for a public award-chart aggregator page (§6).
+  The aggregator scrapes the <table> below with a real HTML parser; a row only
+  becomes a datum when the selector actually hits (anti-hallucination, §2.1).
+  Swap this file:// target for a real https:// page in knowledge/sources.yaml
+  and nothing else changes.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>AwardAtlas — Star Alliance partner charts</title></head>
+<body>
+  <h1>Star Alliance partner award chart (one-way, saver)</h1>
+  <p>Last updated 2026-06-18.</p>
+  <table id="award-chart">
+    <thead>
+      <tr><th>Program</th><th>From</th><th>To</th><th>Cabin</th><th>Miles</th><th>Roundtrip</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>turkish</td><td>north_america</td><td>europe</td><td>economy</td><td>22,500</td><td>no</td></tr>
+      <tr><td>turkish</td><td>north_america</td><td>europe</td><td>business</td><td>45,000</td><td>no</td></tr>
+      <tr><td>aeroplan</td><td>north_america</td><td>north_america</td><td>economy</td><td>17,300</td><td>no</td></tr>
+      <tr><td>aeroplan</td><td>north_america</td><td>north_america</td><td>business</td><td>35,000</td><td>no</td></tr>
+      <tr><td>aeroplan</td><td>north_america</td><td>europe</td><td>business</td><td>60,000</td><td>no</td></tr>
+      <tr><td>lifemiles</td><td>north_america</td><td>north_america</td><td>economy</td><td>12,900</td><td>no</td></tr>
+      <tr><td>lifemiles</td><td>north_america</td><td>north_america</td><td>business</td><td>25,000</td><td>no</td></tr>
+    </tbody>
+  </table>
+</body>
+</html>

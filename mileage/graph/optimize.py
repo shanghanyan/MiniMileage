@@ -70,6 +70,7 @@ def rank_paths(
         provenance: list[Provenance] = []
         flags: set[str] = set(fare_flags)
         program = path[-2]  # node feeding SEAT
+        seats_available: Optional[int] = None
 
         for u, v in zip(path, path[1:]):
             edge = graph.edges[u, v]
@@ -79,8 +80,12 @@ def rank_paths(
             flags.update(edge.get("flags", []))
             if v == SEAT_NODE:
                 miles = edge["miles"]
+                seats_available = edge.get("seats_available")
             else:
                 ratios.append(edge["ratio"])
+
+        if seats_available is not None:
+            flags.add(f"{seats_available} seats")
 
         eff_ratio = compound_ratio(ratios)
         source_points = source_points_for_award(miles, eff_ratio)

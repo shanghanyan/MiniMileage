@@ -3,11 +3,14 @@
 Pipeline per group:
   1. Drop quotes that fail sanity bounds (no hallucinations, §2.1).
   2. Age-decay each quote's confidence; flag `stale` past the cutoff.
-  3. Reconcile across INDEPENDENT sources (distinct source_name):
+  3. Live precedence (§2.5): if any quote in the group carries live award space
+     (no `no_live_space` flag), the chart-only quotes are dropped and only the
+     live quotes reconcile — a confirmed seat overrides a static chart price.
+  4. Reconcile across INDEPENDENT sources (distinct source_name):
        - multiple independent -> trust-weighted median; spread >10% adds a
          `sources_disagree_NN%` flag and demotes confidence.
        - single source -> `single_source` flag at medium confidence.
-  4. Carry through provenance and chart flags (`no_live_space`, etc.).
+  5. Carry through provenance, seat availability, and chart flags.
 
 Cross-check earns its name only across genuinely independent providers (§2.3).
 Two mirrors of the same chart are not independent — here, independence is keyed
@@ -34,6 +37,7 @@ class VerifiedAward:
     route: Route
     miles: int
     confidence: float
+    seats_available: Optional[int] = None  # set once live space verifies it
     flags: list[str] = field(default_factory=list)
     provenance: list[Provenance] = field(default_factory=list)
 
@@ -65,6 +69,11 @@ def verify_award_quotes(
 
     verified: list[VerifiedAward] = []
     for program, group in by_program.items():
+        # Live precedence (§2.5): a confirmed seat overrides a static chart.
+        live = [q for q in group if "no_live_space" not in q.flags]
+        if live:
+            group = live
+
         miles_vals = [float(q.miles) for q in group]
         weights = [max(q.provenance.trust, 1e-6) for q in group]
         decayed = [
@@ -77,6 +86,11 @@ def verify_award_quotes(
             flags.update(q.flags)
             if is_stale(q.provenance, now=now):
                 flags.add("stale")
+        if live:
+            flags.discard("no_live_space")
+
+        seats = [q.seats_available for q in group if q.seats_available is not None]
+        seats_available = max(seats) if seats else None
 
         n_independent = _independent_sources(group)
         if n_independent >= 2:
@@ -99,6 +113,7 @@ def verify_award_quotes(
                 route=group[0].route,
                 miles=miles,
                 confidence=round(confidence, 3),
+                seats_available=seats_available,
                 flags=sorted(flags),
                 provenance=[q.provenance for q in group],
             )

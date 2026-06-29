@@ -59,5 +59,6 @@ def build_graph(
             confidence=a.confidence,
             provenance=a.provenance,
             flags=list(a.flags),
+            seats_available=a.seats_available,
         )
     return g

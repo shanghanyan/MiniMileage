@@ -13,6 +13,7 @@ from pathlib import Path
 
 import yaml
 
+from .providers.aggregator import AggregatorProvider
 from .providers.amadeus import AmadeusProvider
 from .providers.aviationstack import AviationstackProvider
 from .providers.curated import CuratedProvider
@@ -33,11 +34,19 @@ class Config:
     rate_per_sec: float = 5.0
     rate_capacity: float = 10.0
     knowledge_dir: Path = field(default=_KNOWLEDGE_DIR)
+    # Engine A is the DEFAULT award-space/chart source from Phase 1. Toggle off
+    # with MILEAGE_NO_AGGREGATOR=1 to fall back to curated-only (graceful, §2.4).
+    aggregator_enabled: bool = True
+
+    @property
+    def sources_path(self) -> Path:
+        return self.knowledge_dir / "sources.yaml"
 
     @classmethod
     def from_env(cls) -> "Config":
         return cls(
             db_path=os.getenv("MILEAGE_DB", "mileage.db"),
+            aggregator_enabled=os.getenv("MILEAGE_NO_AGGREGATOR", "") == "",
         )
 
 
@@ -48,7 +57,13 @@ def build_registry(config: Config | None = None) -> ProviderRegistry:
         # Primary live APIs (self-disable without keys).
         AmadeusProvider(),
         SeatsAeroProvider(),
-        # Curated YAML: default L4 charts/ratios + fallback L2 fares.
+        # Engine A: default L3 award space + L4 charts from real scraped data.
+        AggregatorProvider(
+            sources_path=config.sources_path,
+            knowledge_dir=config.knowledge_dir,
+            enabled=config.aggregator_enabled,
+        ),
+        # Curated YAML: trusted L4 charts/ratios baseline + fallback L2 fares.
         CuratedProvider(knowledge_dir=config.knowledge_dir),
         # Wired fallbacks (DOWN until later phases).
         TravelpayoutsProvider(),
