@@ -520,6 +520,68 @@ def run_demo_multiuser(
     return 0
 
 
+def run_eval(config: Config) -> int:
+    """Phase 5: run the golden route set as a CI honesty gate.
+
+    Returns a non-zero exit code if any golden case fails, so "no data without
+    verification" is a failing build (§10, §12 Phase 5). Runs offline and
+    deterministically — the live providers self-disable and the aggregator is
+    pinned to its fixtures.
+    """
+    from . import evals
+
+    report = evals.run_golden(base_config=config)
+    print(evals.render_report(report))
+    return 0 if report.ok else 1
+
+
+def run_demo_observability(config: Config) -> int:
+    """Phase 5 demo: traceable runs + the anti-hallucination gate in action.
+
+    1) Reports the tracing backend (Arize AX / console / off).
+    2) Runs the golden route set — every run is a trace; the honesty rules pass.
+    3) Feeds a stale/garbage chart and shows verification rejecting it, with the
+       exact rejection reason (the trace shows *where*).
+    """
+    from . import evals
+
+    print("\n=== Phase 5 — observability + evals demo ===\n")
+
+    active = obs.setup_tracing()
+    if active:
+        print("1) Tracing: ACTIVE — each run below emits OpenInference spans.")
+        print("   (CHAIN `quote` -> RETRIEVER per provider -> verify -> optimize)")
+    else:
+        print("1) Tracing: inactive (no-op). Enable with either:")
+        print("     ARIZE_SPACE_ID + ARIZE_API_KEY     -> ship spans to Arize AX")
+        print("     MILEAGE_TRACE_CONSOLE=1            -> print spans locally")
+        print("   The pipeline runs identically either way (purely additive).")
+
+    print("\n2) Golden route set (Demo A + Demo B + honesty extras)")
+    report = evals.run_golden(base_config=config)
+    for case in report.cases:
+        mark = "PASS" if case.passed else "FAIL"
+        print(f"   [{mark}] {case.name:<22} -> {case.label}")
+    n_pass = sum(1 for c in report.cases if c.passed)
+    print(f"   {n_pass}/{len(report.cases)} passed -> "
+          f"{'BUILD OK' if report.ok else 'BUILD FAILS'}")
+
+    print("\n3) Poisoned chart — feed verification a stale/garbage source")
+    poison = evals.run_poison_check()
+    for row in evals.poison_rows(Route("LAX", "IST", Cabin.BUSINESS)):
+        print(f"   planted: {row.desc}")
+    print("   ---")
+    for c in poison.checks:
+        tick = "ok" if c.ok else "XX"
+        print(f"   ({tick}) {c.name}: {c.detail}")
+    print(
+        f"\n   -> {'verification rejected the poison; build stays green'  if poison.ok else 'POISON SURVIVED — build would FAIL here'}"
+    )
+    print("   (with tracing on, the `verify:anti-hallucination` span shows where)\n")
+
+    return 0 if (report.ok and poison.ok) else 1
+
+
 def run_demo(registry: ProviderRegistry, repo: Repository, config: Config) -> int:
     for key in ("A", "B"):
         spec = DEMOS[key]
@@ -571,6 +633,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Phase 4: two users, one route -> one scrape, both served from cache",
     )
 
+    sub.add_parser(
+        "eval",
+        help="Phase 5: run the golden route set as a CI honesty gate "
+        "(non-zero exit on failure)",
+    )
+
+    sub.add_parser(
+        "demo-observability",
+        help="Phase 5: traceable runs + the anti-hallucination gate "
+        "(poisoned chart rejected)",
+    )
+
     p = sub.add_parser("providers", help="provider federation status + quota")
     p.add_argument("--json", action="store_true")
 
@@ -619,6 +693,12 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         if args.command == "demo-multiuser":
             return run_demo_multiuser(registry, repo, config)
+
+        if args.command == "eval":
+            return run_eval(config)
+
+        if args.command == "demo-observability":
+            return run_demo_observability(config)
 
         if args.command == "demo":
             return run_demo(registry, repo, config)

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mileage"
 version = "0.0.0"
-description = "A points-to-flights optimizer. Phase 4: multi-user Capital One vertical slice with CLI, FastAPI, React UI, and a Redis-backed shared memory layer."
+description = "A points-to-flights optimizer. Phase 5: multi-user Capital One vertical slice with CLI, FastAPI, React UI, a Redis-backed shared memory layer, and Arize AX tracing + golden-route CI evals."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

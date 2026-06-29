@@ -1,4 +1,7 @@
-# Mileage — Phase 0–4 dependencies
+# Mileage — Phase 0–5 core dependencies.
+# Optional extras live in pyproject.toml: [aggregator], [multiuser] (Redis),
+# and [observability] (Arize AX / OpenInference tracing — Phase 5). Each
+# degrades gracefully to a no-op when its extra is not installed.
 PyYAML>=6.0,<7.0
 networkx>=3.0,<4.0
 httpx>=0.27,<1.0
