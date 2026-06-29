@@ -23,6 +23,7 @@ from .config import (
     DEFAULT_CURRENCY,
     build_registry,
     build_repository,
+    load_federation,
     partner_programs,
 )
 from .domain.models import (
@@ -254,30 +255,139 @@ DEMOS = {
 }
 
 
-def run_sources(config: Config, *, validate: bool = False) -> int:
-    """List the aggregator's targets; optionally run the URL-rot health check."""
+def run_sources(
+    config: Config,
+    repo: Repository,
+    *,
+    validate: bool = False,
+    force: bool = False,
+) -> int:
+    """List Engine A targets; optionally run the monthly URL-rot health check."""
     from .providers.aggregator import AggregatorProvider
 
+    federation = load_federation(config)
     agg = AggregatorProvider(
         sources_path=config.sources_path,
         knowledge_dir=config.knowledge_dir,
         enabled=config.aggregator_enabled,
+        health_repo=repo,
     )
     if validate:
-        agg.validate_urls()
+        agg.validate_urls(
+            force=force,
+            max_age_days=federation.health_check_days,
+        )
     print(f"Engine A targets ({len(agg.targets)})  ·  provider health: "
           f"{agg.health().value}")
     print("-" * 68)
     for t in agg.targets:
         status = ""
-        if validate:
+        if t.last_checked:
             mark = "ok" if t.healthy() else "DEAD"
-            status = f"  [{mark} status={t.last_status} last_404={t.last_404}]"
+            status = (
+                f"  [{mark} status={t.last_status} last_404={t.last_404} "
+                f"checked={t.last_checked[:10]}]"
+            )
         print(
             f"  {t.trust:.2f}  {t.provides:<6} {t.format:<10} {t.name}{status}"
         )
         print(f"            {t.url}")
     print("-" * 68)
+    return 0
+
+
+def run_providers(registry: ProviderRegistry) -> int:
+    """Show federated provider health, quota, and cache cadence."""
+    federation = registry.federation
+    ttl_days = (registry.ttl_seconds or 0) / 86400
+    print(f"Provider federation  ·  cache TTL {ttl_days:.0f}d  ·  "
+          f"health check every {federation.health_check_days if federation else '?'}d")
+    print("-" * 68)
+    for row in registry.provider_status():
+        q = ""
+        if row["monthly_limit"] is not None:
+            q = f"  quota {row['used']}/{row['monthly_limit']}"
+            if row["remaining"] is not None and row["remaining"] <= 0:
+                q += " EXHAUSTED"
+        dis = " DISABLED" if row["disabled"] else ""
+        print(
+            f"  {row['trust']:.2f}  {row['health']:<9} {row['name']:<16} "
+            f"[{', '.join(row['layers'])}]{q}{dis}"
+        )
+    stats = registry.stats
+    print("-" * 68)
+    print(f"  last run: {stats.cache_hits} cache hits, "
+          f"{stats.cache_misses} misses, {stats.quota_skips} quota skips")
+    return 0
+
+
+def run_demo_degrade(
+    registry: ProviderRegistry,
+    repo: Repository,
+    config: Config,
+) -> int:
+    """Phase 2 demo: disable or exhaust a provider -> fallback, both demos pass."""
+    from .store.sqlite_repo import SQLiteRepository
+
+    assert isinstance(repo, SQLiteRepository)
+
+    federation = load_federation(config)
+    route_b = Route("LAX", "IST", Cabin.BUSINESS)
+    user_b = User(balances={DEFAULT_CURRENCY: 90000}, card="venture_x")
+
+    print("\n=== Phase 2 — federation hardening demo ===\n")
+
+    # 1) Warm cache: first run = misses, second = hits (zero quota on hits).
+    registry.reset_stats()
+    run_quote(route_b, user_b, DEFAULT_CURRENCY, registry=registry, repo=repo, config=config)
+    miss_stats = registry.stats
+    registry.reset_stats()
+    run_quote(route_b, user_b, DEFAULT_CURRENCY, registry=registry, repo=repo, config=config)
+    hit_stats = registry.stats
+    print("1) Cache cadence (~2-day TTL)")
+    print(f"   first run:  {miss_stats.cache_misses} cache misses")
+    print(f"   second run: {hit_stats.cache_hits} cache hits, "
+          f"{hit_stats.cache_misses} misses (hits cost zero quota)")
+
+    # 2) Disable aggregator -> curated-only award data, verdict still computes.
+    registry.disabled.add("aggregator")
+    registry.reset_stats()
+    result = run_quote(
+        route_b, user_b, DEFAULT_CURRENCY,
+        registry=registry, repo=repo, config=config,
+    )
+    registry.disabled.discard("aggregator")
+    verdict = result["verdict"]
+    winner_flags = verdict.best_transfer.flags if verdict.best_transfer else []
+    print("\n2) Aggregator disabled -> curated fallback")
+    print(f"   verdict: {verdict.label.value}")
+    print(f"   winner flags: {', '.join(winner_flags) or '(none)'}")
+    assert verdict.label.value in ("best", "tentative_best"), "Demo B must still pass"
+    assert "no_live_space" in winner_flags, "degraded to chart-only without Engine A"
+
+    # 3) Exhaust travelpayouts quota -> fare falls back to curated floor.
+    tp_limit = federation.monthly_quota("travelpayouts")
+    if tp_limit is not None:
+        repo.quota_exhaust("travelpayouts", tp_limit)
+    registry.cache.clear()
+    registry.reset_stats()
+    route_a = Route("LAX", "JFK", Cabin.ECONOMY)
+    user_a = User(balances={DEFAULT_CURRENCY: 20000}, card="venture_x")
+    result3 = run_quote(
+        route_a, user_a, DEFAULT_CURRENCY,
+        registry=registry, repo=repo, config=config,
+    )
+    if tp_limit is not None:
+        repo.quota_reset("travelpayouts")
+    fare_flags = result3["fare"].flags if result3.get("fare") else []
+    print("\n3) Travelpayouts quota exhausted -> curated fare fallback")
+    print(f"   quota skips this run: {registry.stats.quota_skips}")
+    print(f"   fare flags: {', '.join(fare_flags) or '(none)'}")
+    assert "hardcoded_fallback" in fare_flags, "must fall back to curated fares"
+
+    # 4) Both canonical demos still pass end-to-end.
+    print("\n4) Canonical demos (must still pass)")
+    run_demo(registry, repo, config)
     return 0
 
 
@@ -322,11 +432,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("demo", help="run Demo A and Demo B side by side")
 
+    sub.add_parser(
+        "demo-degrade",
+        help="Phase 2: show cache hits, provider disable, quota fallback",
+    )
+
+    p = sub.add_parser("providers", help="provider federation status + quota")
+    p.add_argument("--json", action="store_true")
+
     s = sub.add_parser("sources", help="list aggregator targets (Engine A)")
     s.add_argument(
         "--validate-urls",
         action="store_true",
-        help="probe each target and report status / last_404 (URL-rot health check)",
+        help="run URL-rot health check (monthly cadence; use --force to re-probe)",
+    )
+    s.add_argument(
+        "--force",
+        action="store_true",
+        help="re-probe all targets even if checked within the monthly window",
     )
     return parser
 
@@ -338,12 +461,26 @@ def main(argv: Optional[list[str]] = None) -> int:
         format="%(levelname)s %(name)s: %(message)s",
     )
     config = Config.from_env()
-    registry = build_registry(config)
     repo = build_repository(config)
+    registry = build_registry(config, repo)
 
     try:
         if args.command == "sources":
-            return run_sources(config, validate=args.validate_urls)
+            return run_sources(
+                config, repo,
+                validate=args.validate_urls,
+                force=getattr(args, "force", False),
+            )
+
+        if args.command == "providers":
+            if getattr(args, "json", False):
+                print(json.dumps(registry.provider_status(), indent=2))
+            else:
+                run_providers(registry)
+            return 0
+
+        if args.command == "demo-degrade":
+            return run_demo_degrade(registry, repo, config)
 
         if args.command == "demo":
             return run_demo(registry, repo, config)

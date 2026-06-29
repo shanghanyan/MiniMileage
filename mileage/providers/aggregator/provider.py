@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import yaml
 
@@ -39,7 +39,7 @@ from .parse import (
     parse_rss,
 )
 from .politeness import PolitenessPolicy
-from .sources import Target, load_targets, validate_targets
+from .sources import Target, apply_persisted_health, load_targets, validate_targets
 
 log = logging.getLogger("mileage.aggregator")
 
@@ -73,14 +73,18 @@ class AggregatorProvider:
         knowledge_dir: Optional[Path] = None,
         fetcher: Optional[Fetcher] = None,
         enabled: bool = True,
+        health_repo: Any = None,
     ) -> None:
         self._dir = Path(knowledge_dir) if knowledge_dir else _KNOWLEDGE_DIR
         self._sources_path = (
             Path(sources_path) if sources_path else self._dir / "sources.yaml"
         )
         self.enabled = enabled
+        self._health_repo = health_repo
         self._region_map = self._load_region_map()
         self.targets: list[Target] = load_targets(self._sources_path)
+        if health_repo is not None:
+            apply_persisted_health(self.targets, health_repo)
         self.fetcher = fetcher or Fetcher(
             politeness=PolitenessPolicy(), base_dir=self._dir
         )
@@ -111,9 +115,21 @@ class AggregatorProvider:
             return self._fetch_award(q.route, wanted)
         return []
 
-    def validate_urls(self) -> list[Target]:
-        """Run the `--validate-urls` health check (records last_404)."""
-        return validate_targets(self.targets, self.fetcher)
+    def validate_urls(
+        self,
+        *,
+        force: bool = False,
+        max_age_days: int = 30,
+    ) -> list[Target]:
+        """Run the URL-rot health check; persist results to SQLite."""
+        self.targets = validate_targets(
+            self.targets,
+            self.fetcher,
+            health_repo=self._health_repo,
+            force=force,
+            max_age_days=max_age_days,
+        )
+        return self.targets
 
     # --- helpers ----------------------------------------------------------- #
     def _load_region_map(self) -> dict[str, str]:

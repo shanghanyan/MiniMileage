@@ -1,0 +1,44 @@
+# Provider federation config (Phase 2, §5).
+#
+# Defines trust order hints, monthly free-tier quotas, and refresh cadence.
+# The registry reads this to enforce quota guards and cache TTLs without
+# hard-coding provider limits in Python.
+
+defaults:
+  cache_ttl_days: 2          # ~15 calls/route/month per provider (§5)
+  health_check_days: 30      # monthly URL-rot check for aggregator targets
+  quota_warn_below: 10       # log when remaining quota drops below this
+
+providers:
+  amadeus:
+    trust: 0.9
+    monthly_quota: 2000      # Amadeus Self-Service free tier (approx)
+    layers: [schedules, fares]
+
+  travelpayouts:
+    trust: 0.6
+    monthly_quota: 100
+    layers: [fares]
+
+  seats_aero:
+    trust: 0.85
+    monthly_quota: 500
+    layers: [award]
+
+  aggregator:
+    trust: 0.6
+    monthly_quota: null      # public scrape; no fixed API quota
+    layers: [award, charts]
+
+  curated:
+    trust: 0.7
+    monthly_quota: null      # local YAML
+    layers: [charts, fares]
+    layer_trust:
+      fares: 0.25            # below travelpayouts — hardcoded floor is last resort
+      charts: 0.7
+
+  aviationstack:
+    trust: 0.3
+    monthly_quota: 100       # free tier ~100/mo
+    layers: [schedules]

@@ -1,0 +1,16 @@
+# Travelpayouts/Aviasales cached cash fares (Layer 2 fallback, §5).
+#
+# These are pre-fetched cached fares — the Travelpayouts provider serves them
+# when Amadeus is unavailable or quota-exhausted. Flagged `cached_fare` (not
+# live) at medium trust so the registry can fall back gracefully without
+# touching the curated hardcoded floor unless both live sources fail.
+#
+# Key format: ORIGIN-DEST-cabin  (US cents, one-way)
+fares:
+  LAX-JFK-economy: 16200
+  JFK-LAX-economy: 16200
+  LAX-IST-business: 415000
+  IST-LAX-business: 415000
+  SFO-NRT-business: 375000
+  NRT-SFO-business: 375000
+  LAX-LHR-business: 355000

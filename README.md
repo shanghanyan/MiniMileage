@@ -6,10 +6,10 @@ cheapest, fastest, most comfortable. This repo is the working vertical slice:
 one transferable currency end-to-end (**Capital One → Star Alliance partners →
 award space**), CLI-only, single-user, no web stack, no "Brain".
 
-**Phases shipped: 0 (vertical slice) + 1 (the Aggregator / Engine A).** Award
-space is now real scraped data, normalized to the same `AwardQuote` contract as
-every API provider. See `Cursor-Mileage-Plan.md` for the full staged
-architecture.
+**Phases shipped: 0 (vertical slice) + 1 (Aggregator / Engine A) + 2 (federation
+hardening).** Award space is real scraped data; the provider registry now
+enforces quota guards, 2-day cache cadence, and ordered fallbacks. See
+`Cursor-Mileage-Plan.md` for the full staged architecture.
 
 ## What Phase 0 does
 
@@ -62,6 +62,38 @@ python -m mileage.cli sources --validate-urls
 MILEAGE_NO_AGGREGATOR=1 python -m mileage.cli demo
 ```
 
+## What Phase 2 adds — provider federation hardening
+
+The registry is now production-shaped for free-tier APIs (§5):
+
+- **Ordered fallbacks** — `knowledge/providers.yaml` defines trust, monthly
+  quotas, and per-layer trust (e.g. Travelpayouts cached fares at 0.6 beat
+  curated hardcoded fares at 0.25; Amadeus live fares at 0.9 beat both).
+- **Quota guards** — SQLite tracks per-provider monthly usage; exhausted
+  providers are skipped and the next fallback is tried (never crashes).
+- **2-day cache cadence** — cache hits cost **zero quota**; interactive
+  re-runs within the TTL are free (~15 calls/route/month per provider).
+- **Monthly URL-rot check** — `sources --validate-urls` persists health to
+  SQLite and skips re-probing within 30 days unless `--force`.
+- **Graceful degradation demo** — disable or exhaust a provider mid-run and
+  both canonical demos still pass, flagged honestly (`single_source`,
+  `no_live_space`, `hardcoded_fallback` as appropriate).
+
+```bash
+# Provider health, quota used/remaining, cache stats
+python -m mileage.cli providers
+
+# Phase 2 demo: cache hits, disable aggregator, exhaust quota -> fallback
+python -m mileage.cli demo-degrade
+
+# Disable specific providers (comma-separated)
+MILEAGE_DISABLE_PROVIDERS=aggregator,amadeus python -m mileage.cli demo
+
+# Monthly health check (skip if checked within 30d; --force to re-probe)
+python -m mileage.cli sources --validate-urls
+python -m mileage.cli sources --validate-urls --force
+```
+
 ## Install
 
 ```bash
@@ -87,22 +119,23 @@ python -m mileage.cli quote --from LAX --to IST --cabin business \
 python -m mileage.cli quote --from LAX --to IST --cabin business --miles 90000 --json
 ```
 
-Phase 0 runs with **zero API keys**. To use live cash fares, set
-`AMADEUS_CLIENT_ID` / `AMADEUS_CLIENT_SECRET`; otherwise the curated fallback
-fares in `mileage/knowledge/fares.yaml` are used (flagged `hardcoded_fallback`).
+Phase 0 runs with **zero API keys**. Without Amadeus keys the fare chain is
+**Travelpayouts cached** → curated hardcoded fallback. Set
+`AMADEUS_CLIENT_ID` / `AMADEUS_CLIENT_SECRET` for live fares.
 
 ## Architecture (the inverted structure, §4)
 
 ```
 mileage/
   domain/      # pure, no I/O: models, ratios, charts, cpp, verdict
-  providers/   # one interface, many sources; aggregator + curated + amadeus + stubs
-    aggregator/  # Engine A — real scraper (fetch + politeness + parse + sources)
-    brain/       # Engine B — QUARANTINED, empty
-  verify/      # crosscheck, trust, freshness, bounds (no-hallucination rules)
+  providers/   # federation: aggregator + curated + amadeus + travelpayouts + stubs
+    federation.py  # loads knowledge/providers.yaml (trust, quota, layer order)
+    aggregator/    # Engine A — real scraper
+    brain/         # Engine B — QUARANTINED
+  verify/      # crosscheck, trust, freshness, bounds
   graph/       # NetworkX CPP-by-product model + ranking
-  store/       # Repository (SQLite) + Cache/RateLimiter/Lock interfaces
-  knowledge/   # versioned ratios.yaml / charts.yaml / fares.yaml / sources.yaml
+  store/       # Repository (SQLite) + quota guard + Cache/RateLimiter/Lock
+  knowledge/   # ratios, charts, fares, sources, providers, travelpayouts_cache
   cli.py  config.py
 ```
 

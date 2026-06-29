@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import yaml
 
@@ -81,13 +81,56 @@ def load_targets(sources_path: Path) -> list[Target]:
     return sorted(targets, key=lambda t: t.trust, reverse=True)
 
 
-def validate_targets(targets: list[Target], fetcher) -> list[Target]:
-    """Probe each target; record last_status/last_404 (the `--validate-urls` job)."""
+def apply_persisted_health(
+    targets: list[Target], health_repo: Any
+) -> list[Target]:
+    """Merge last-known health from SQLite into in-memory targets."""
+    for t in targets:
+        row = health_repo.get_source_health(t.name)
+        if row:
+            t.last_status = row.get("last_status")
+            t.last_404 = bool(row.get("last_404"))
+            t.last_checked = row.get("checked_at")
+    return targets
+
+
+def _needs_check(checked_at: Optional[str], max_age_days: int) -> bool:
+    if not checked_at:
+        return True
+    try:
+        dt = datetime.fromisoformat(checked_at)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return True
+    return datetime.now(timezone.utc) - dt > timedelta(days=max_age_days)
+
+
+def validate_targets(
+    targets: list[Target],
+    fetcher,
+    *,
+    health_repo: Any = None,
+    force: bool = False,
+    max_age_days: int = 30,
+) -> list[Target]:
+    """Probe each target; persist health (monthly URL-rot check, Phase 2)."""
     now = datetime.now(timezone.utc).isoformat()
     for t in targets:
+        if health_repo and not force and not _needs_check(t.last_checked, max_age_days):
+            log.info("skip validate %s: checked %s (< %d days)", t.name, t.last_checked, max_age_days)
+            continue
         ok, status = fetcher.head_ok(t.url)
         t.last_status = status
         t.last_404 = (status == 404) or (not ok and status == 0)
         t.last_checked = now
         log.info("validate %s -> status=%s ok=%s", t.name, status, ok)
+        if health_repo is not None:
+            health_repo.put_source_health(
+                t.name,
+                t.url,
+                last_status=status,
+                last_404=t.last_404,
+                checked_at=now,
+            )
     return targets

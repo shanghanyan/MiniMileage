@@ -40,6 +40,10 @@ class InProcCache:
         with self._lock:
             self._data.pop(key, None)
 
+    def clear(self) -> None:
+        with self._lock:
+            self._data.clear()
+
 
 class InProcRateLimiter:
     """Per-key token bucket. Refills `rate` tokens/sec up to `capacity`."""
