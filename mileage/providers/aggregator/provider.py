@@ -35,6 +35,7 @@ from .parse import (
     normalize_one_way,
     parse_award_json,
     parse_chart_html,
+    parse_chart_html_wide,
     parse_chart_json,
     parse_rss,
 )
@@ -197,12 +198,15 @@ class AggregatorProvider:
     def _parse_chart_rows(self, target: Target, text: str) -> list[RawChartRow]:
         if target.format == "html_table":
             return parse_chart_html(text, updated_at=target.updated_at)
+        if target.format == "html_table_wide":
+            prog = target.program or target.name
+            return parse_chart_html_wide(text, program=prog, updated_at=target.updated_at)
         if target.format == "json":
             return parse_chart_json(text)
         if target.format == "rss":
             charts, _ = parse_rss(text)
             return charts
-        return []  # pdf path is optional; degrades to empty without pdfplumber
+        return []  # pdf: requires pdfplumber binary extraction; degrades to empty without it
 
     def _build_charts(self, rows: list[RawChartRow]) -> dict[str, dict]:
         """Group raw rows into per-program chart specs for lookup_award_miles."""

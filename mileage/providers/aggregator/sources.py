@@ -19,7 +19,7 @@ import yaml
 
 log = logging.getLogger("mileage.aggregator.sources")
 
-_VALID_FORMATS = {"html_table", "json", "rss", "pdf"}
+_VALID_FORMATS = {"html_table", "html_table_wide", "json", "rss", "pdf"}
 _VALID_PROVIDES = {"chart", "award"}
 
 
@@ -27,11 +27,12 @@ _VALID_PROVIDES = {"chart", "award"}
 class Target:
     name: str
     url: str
-    format: str            # html_table | json | rss | pdf
+    format: str            # html_table | html_table_wide | json | rss | pdf
     provides: str          # chart | award
     trust: float = 0.5
     layers: list[str] = field(default_factory=list)
     updated_at: Optional[str] = None
+    program: Optional[str] = None  # loyalty program (required for html_table_wide + pdf)
     # Health, mutated by validate():
     last_status: Optional[int] = None
     last_404: bool = False
@@ -75,6 +76,7 @@ def load_targets(sources_path: Path) -> list[Target]:
                 trust=float(raw.get("trust", 0.5)),
                 layers=list(raw.get("layers", [])),
                 updated_at=raw.get("updated_at"),
+                program=str(raw["program"]).strip().lower() if raw.get("program") else None,
             )
         )
     # Highest trust first: rotation/cross-check both prefer trusted sources.

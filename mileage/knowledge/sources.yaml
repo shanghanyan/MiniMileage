@@ -1,38 +1,95 @@
 # Aggregator (Engine A) target list — ordered, trust-weighted (§6).
 #
-# PHASE 1: this list is live. The aggregator fetches each target, parses it, and
-# emits normalized AwardQuotes (same contract as every API provider). Only
-# PUBLIC, non-WAF'd sources belong here; anything behind a heavy WAF is the
-# Brain's (Engine B) problem and is quarantined (§8).
+# PHASE 1+: real public URLs for L4 chart data. Sources are sorted by the
+# loader (highest trust first) but explicit ordering here states intent.
 #
-# The `file://` URLs below point at knowledge/fixtures/*, which stand in for
-# public pages so the slice runs offline and deterministically. Swapping a
-# `file://` target for a real `https://` one is a CONFIG change, not a code
-# change — the fetch/parse path is identical.
+# BRAIN BOUNDARY: WAF-protected first-party sites (Turkish official,
+# LifeMiles official, ANA official, KrisFlyer official) belong to Engine B.
+# Do NOT add those here. See §8 quarantine constraints in Cursor-Mileage-Plan.md.
 #
 # Target schema:
-#   name      unique source id (becomes the provenance source_name)
-#   url       file:// (relative to this dir) or http(s)://
-#   format    html_table | json | rss | pdf
-#   provides  chart  (L4, no live seat -> no_live_space)
-#             award  (L3, live seat -> seats_available set)
-#   trust     [0,1] weight used for rotation order + cross-check median
-#   layers    informational tags
+#   name       unique source id (becomes provenance source_name)
+#   url        file:// (relative to this dir) or http(s)://
+#   format     html_table | html_table_wide | json | rss | pdf
+#   program    loyalty program this source covers (required for html_table_wide + pdf)
+#   provides   chart  (L4 — no live seat -> no_live_space flag)
+#              award  (L3 — live seat -> seats_available set)
+#   trust      [0,1] weight for rotation order + cross-check median
+#   updated_at ISO date the source data was last verified current
+#   layers     informational tags
 
 targets:
+
+  # ── L4 CHARTS — live public URLs ───────────────────────────────────────────
+
+  # Aeroplan official Air Canada PDF (distance-based, June 2026).
+  # Requires pdfplumber for binary PDF extraction; gracefully returns []
+  # without it. The ATF HTML source below is the active fallback.
+  - name: aeroplan-official-pdf
+    url: https://www.aircanada.com/content/dam/aircanada/loyalty-content/documents/flight-rewards-chart-june2026-en.pdf
+    format: pdf
+    program: aeroplan
+    provides: chart
+    trust: 0.95
+    updated_at: "2026-06-01"
+    layers: [charts]
+
+  # Aeroplan: AwardTravelFinder HTML chart (server-rendered, no WAF, June 2026).
+  # Table format: From | Distance | Economy | Premium | Business | First | Note
+  - name: atf-aeroplan-chart
+    url: https://awardtravelfinder.com/award-charts/aeroplan
+    format: html_table_wide
+    program: aeroplan
+    provides: chart
+    trust: 0.82
+    updated_at: "2026-06-29"
+    layers: [charts]
+
+  # LifeMiles: AwardTravelFinder HTML chart (server-rendered, no WAF, June 2026).
+  # Table format: From | To | Economy | Business | First | Note
+  - name: atf-lifemiles-chart
+    url: https://awardtravelfinder.com/award-charts/lifemiles
+    format: html_table_wide
+    program: lifemiles
+    provides: chart
+    trust: 0.80
+    updated_at: "2026-06-29"
+    layers: [charts]
+
+  # LifeMiles third-party PDF (thriftytraveler.com, zone matrix, 2022).
+  # Requires pdfplumber; gracefully returns []. Trust low — outdated + third-party.
+  # Useful only as a cross-check when ATF HTML is unavailable.
+  - name: lifemiles-chart-pdf
+    url: https://thriftytraveler.com/wp-content/uploads/2022/06/Avianca-Redemption-Table.pdf
+    format: pdf
+    program: lifemiles
+    provides: chart
+    trust: 0.40
+    updated_at: "2022-06-01"
+    layers: [charts]
+
+  # ── L3 LIVE AWARD SPACE ────────────────────────────────────────────────────
+
+  # Placeholder fixture — stands in for a live seats.aero partner API call.
+  # Real replacement: configure SEATS_AERO_KEY and wire SeatAeroProvider (§7).
+  # Turkish/Aeroplan/LifeMiles live space flows through here in demo mode.
   - name: starnet-award-space
     url: file://fixtures/starnet_award_space.json
     format: json
     provides: award
-    trust: 0.70
+    trust: 0.30
     updated_at: "2026-06-24"
     layers: [award]
 
+  # ── OFFLINE / TEST FIXTURES ────────────────────────────────────────────────
+
+  # Legacy long-format HTML fixture (program/from/to/cabin/miles columns).
+  # Kept for offline CI and backward-compat; real data comes from ATF above.
   - name: awardatlas-charts
     url: file://fixtures/awardatlas_charts.html
     format: html_table
     provides: chart
-    trust: 0.60
+    trust: 0.20
     updated_at: "2026-06-18"
     layers: [charts]
 
@@ -40,5 +97,5 @@ targets:
     url: file://fixtures/milefeed.rss
     format: rss
     provides: award
-    trust: 0.45
+    trust: 0.15
     layers: [award]

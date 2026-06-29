@@ -30,6 +30,17 @@ log = logging.getLogger("mileage.aggregator.parse")
 
 _CABINS = {"economy", "premium_economy", "business", "first"}
 
+# Maps wide-table column headers to canonical cabin names.
+_WIDE_CABIN_MAP: dict[str, str] = {
+    "economy": "economy",
+    "premium economy": "premium_economy",
+    "premium_economy": "premium_economy",
+    "premium": "premium_economy",
+    "business": "business",
+    "first": "first",
+    "first class": "first",
+}
+
 
 @dataclass
 class RawChartRow:
@@ -63,6 +74,25 @@ def normalize_one_way(miles: int, roundtrip: bool) -> tuple[int, list[str]]:
 
 def _to_int(value: str) -> Optional[int]:
     digits = re.sub(r"[^0-9]", "", str(value))
+    return int(digits) if digits else None
+
+
+def _wide_miles(value: str) -> Optional[int]:
+    """Parse a wide-format miles cell.
+
+    Handles:
+    - Plain integers with commas: "25,000" -> 25000
+    - Ranges (lower bound = saver rate): "35,000-45,000" -> 35000
+    - Unavailable markers ('—', '–', '', 'N/A', …) -> None
+    """
+    v = value.strip().replace(",", "")
+    if not re.search(r"\d", v):
+        return None  # no digits -> unavailable marker (em-dash, en-dash, etc.)
+    # Range like "35000-45000" or "35000–45000" -> lower bound
+    m = re.match(r"^(\d+)\s*[-–—]\s*\d+", v)
+    if m:
+        return int(m.group(1))
+    digits = re.sub(r"[^0-9]", "", v)
     return int(digits) if digits else None
 
 
@@ -150,6 +180,85 @@ def parse_chart_html(text: str, *, updated_at: Optional[str] = None) -> list[Raw
                 updated_at=updated_at,
             )
         )
+    return out
+
+
+def parse_chart_html_wide(
+    text: str,
+    *,
+    program: str,
+    updated_at: Optional[str] = None,
+) -> list[RawChartRow]:
+    """Parse a 'wide' award chart HTML table.
+
+    Row format (order-independent, case-insensitive):
+        from  |  to  (or distance)  |  economy  |  [premium]  |  business  |  first  |  [note]
+
+    Each row produces one RawChartRow per non-null cabin cell.
+    Range values like '35,000–45,000' use the lower bound (saver tier).
+    Empty / '—' cells are skipped — selector-miss contract preserved.
+
+    Used by awardtravelfinder.com chart pages (Aeroplan, LifeMiles, …).
+    """
+    parser = _ChartTableParser()
+    try:
+        parser.feed(text)
+    except Exception as exc:
+        log.info("html_wide parse error: %s", exc)
+        return []
+    if not parser.header:
+        return []
+
+    header = [h.strip().lower() for h in parser.header]
+    idx = {name: i for i, name in enumerate(header)}
+
+    if "from" not in idx:
+        log.info("html_wide: no 'from' column in %s", header)
+        return []
+
+    # Accept 'to' (LifeMiles zone pairs) or 'distance' (Aeroplan distance bands)
+    zone_col = next((c for c in ("to", "distance") if c in idx), None)
+    if zone_col is None:
+        log.info("html_wide: no 'to'/'distance' column in %s", header)
+        return []
+
+    # Collect cabin columns in header order
+    cabin_cols: list[tuple[str, str]] = []  # (header_key, canonical_cabin)
+    for label in header:
+        canonical = _WIDE_CABIN_MAP.get(label)
+        if canonical:
+            cabin_cols.append((label, canonical))
+    if not cabin_cols:
+        log.info("html_wide: no cabin columns in %s", header)
+        return []
+
+    out: list[RawChartRow] = []
+    prog = program.strip().lower()
+    for cells in parser.rows:
+        if len(cells) <= max(idx["from"], idx[zone_col]):
+            continue
+        region_a = cells[idx["from"]].strip().lower()
+        region_b = cells[idx[zone_col]].strip().lower()
+        if not region_a or not region_b:
+            continue
+        for label, canonical in cabin_cols:
+            col_i = idx[label]
+            if col_i >= len(cells):
+                continue
+            miles = _wide_miles(cells[col_i])
+            if miles is None:
+                continue  # selector miss -> drop, never guess
+            out.append(
+                RawChartRow(
+                    program=prog,
+                    region_a=region_a,
+                    region_b=region_b,
+                    cabin=canonical,
+                    miles=miles,
+                    roundtrip=False,
+                    updated_at=updated_at,
+                )
+            )
     return out
 
 
