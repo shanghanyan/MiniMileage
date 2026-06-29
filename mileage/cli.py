@@ -37,6 +37,7 @@ from .domain.models import (
     Verdict,
     VerdictLabel,
 )
+from . import obs
 from .domain.verdict import conclude_winner
 from .graph.build import build_graph
 from .graph.optimize import rank_paths
@@ -66,69 +67,106 @@ def run_quote(
     config = config or Config.from_env()
     balance = user.balances.get(currency, 0)
 
-    if on_step:
-        on_step("route")
-
-    if on_step:
-        on_step("gathering")
-
-    # L2 cash fare — the price-to-beat.
-    fare_quotes = [
-        q
-        for q in registry.fetch(Query(route, Layer.FARES, currency))
-        if isinstance(q, FareQuote)
-    ]
-
-    programs = partner_programs(config)
-
-    # L4 ratios + chart-derived award costs.
-    chart_quotes = registry.fetch(
-        Query(route, Layer.CHARTS, currency, programs=programs)
+    chain_cm = obs.span(
+        "quote",
+        obs.KIND_CHAIN,
+        input_value=(
+            f"{route.key()} · {currency} · {balance:,} pts · {user.card} "
+            f"(user={user.user_id})"
+        ),
     )
-    ratios = [q for q in chart_quotes if isinstance(q, TransferRatio)]
-    award_quotes = [q for q in chart_quotes if isinstance(q, AwardQuote)]
+    chain = chain_cm.__enter__()
+    try:
+        if on_step:
+            on_step("route")
 
-    # L3 live award space (Engine A / seats.aero). Pooled with chart quotes so
-    # the verification core applies live precedence + cross-check (§2.5, §7).
-    award_quotes += [
-        q
-        for q in registry.fetch(Query(route, Layer.AWARD, currency, programs=programs))
-        if isinstance(q, AwardQuote)
-    ]
-    if on_step:
-        on_step("crosscheck")
+        if on_step:
+            on_step("gathering")
 
-    vfare = verify_fare(fare_quotes)
-    vawards = verify_award_quotes(award_quotes)
+        # L2 cash fare — the price-to-beat.
+        with obs.span("gather:fares", obs.KIND_CHAIN, input_value=route.key()) as s:
+            fare_quotes = [
+                q
+                for q in registry.fetch(Query(route, Layer.FARES, currency))
+                if isinstance(q, FareQuote)
+            ]
+            obs.set_output(s, f"{len(fare_quotes)} fare quote(s)")
 
-    if on_step:
-        on_step("redemptions")
+        programs = partner_programs(config)
 
-    if vfare is None:
-        return {
-            "route": route,
-            "verdict": None,
-            "error": "no_fare",
-            "message": (
-                "No verified cash fare (price-to-beat) found for this route. "
-                "Configure AMADEUS_CLIENT_ID/SECRET or add it to "
-                "knowledge/fares.yaml. Cannot compute cents-per-point honestly."
-            ),
-        }
+        # L4 ratios + chart-derived award costs.
+        with obs.span("gather:charts", obs.KIND_CHAIN, input_value=route.key()) as s:
+            chart_quotes = registry.fetch(
+                Query(route, Layer.CHARTS, currency, programs=programs)
+            )
+            obs.set_output(s, f"{len(chart_quotes)} chart quote(s)")
+        ratios = [q for q in chart_quotes if isinstance(q, TransferRatio)]
+        award_quotes = [q for q in chart_quotes if isinstance(q, AwardQuote)]
 
-    graph = build_graph(currency, ratios, vawards)
-    options = rank_paths(
-        graph,
-        currency,
-        vfare.cash_cents,
-        portal_cpp=user.portal_cpp(),
-        balance=balance,
-        fare_confidence=vfare.confidence,
-        fare_flags=vfare.flags,
-    )
-    portal = next(o for o in options if o.kind == "portal")
-    transfers = [o for o in options if o.kind == "transfer"]
-    verdict = conclude_winner(route, portal, transfers)
+        # L3 live award space (Engine A / seats.aero). Pooled with chart quotes so
+        # the verification core applies live precedence + cross-check (§2.5, §7).
+        with obs.span("gather:award", obs.KIND_CHAIN, input_value=route.key()) as s:
+            live = [
+                q
+                for q in registry.fetch(
+                    Query(route, Layer.AWARD, currency, programs=programs)
+                )
+                if isinstance(q, AwardQuote)
+            ]
+            obs.set_output(s, f"{len(live)} live award quote(s)")
+        award_quotes += live
+        if on_step:
+            on_step("crosscheck")
+
+        with obs.span("verify", obs.KIND_CHAIN) as s:
+            vfare = verify_fare(fare_quotes)
+            vawards = verify_award_quotes(award_quotes)
+            obs.set_output(
+                s,
+                f"fare={'ok' if vfare else 'none'}, "
+                f"awards={len(vawards)} verified",
+            )
+
+        if on_step:
+            on_step("redemptions")
+
+        if vfare is None:
+            obs.set_output(chain, "no_fare (no verified price-to-beat)")
+            return {
+                "route": route,
+                "verdict": None,
+                "error": "no_fare",
+                "message": (
+                    "No verified cash fare (price-to-beat) found for this route. "
+                    "Configure AMADEUS_CLIENT_ID/SECRET or add it to "
+                    "knowledge/fares.yaml. Cannot compute cents-per-point honestly."
+                ),
+            }
+
+        with obs.span("optimize", obs.KIND_CHAIN) as s:
+            graph = build_graph(currency, ratios, vawards)
+            options = rank_paths(
+                graph,
+                currency,
+                vfare.cash_cents,
+                portal_cpp=user.portal_cpp(),
+                balance=balance,
+                fare_confidence=vfare.confidence,
+                fare_flags=vfare.flags,
+            )
+            portal = next(o for o in options if o.kind == "portal")
+            transfers = [o for o in options if o.kind == "transfer"]
+            verdict = conclude_winner(route, portal, transfers)
+            obs.set_output(s, f"{verdict.label.value} ({len(options)} options)")
+
+        bt = verdict.best_transfer
+        obs.set_output(
+            chain,
+            f"{verdict.label.value}"
+            + (f" · {bt.label} @ {bt.cpp:.2f}c/pt" if bt else " · portal floor"),
+        )
+    finally:
+        chain_cm.__exit__(None, None, None)
 
     if repo is not None:
         for a in vawards:
@@ -557,6 +595,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         format="%(levelname)s %(name)s: %(message)s",
     )
     config = Config.from_env()
+    obs.setup_tracing()
     repo = build_repository(config)
     registry = build_registry(config, repo)
 
@@ -600,6 +639,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 0
     finally:
         repo.close()
+        # Flush spans before the (short-lived) CLI process exits, else async
+        # OTLP exports are dropped and nothing reaches Arize.
+        obs.shutdown_tracing()
 
     return 1
 

@@ -34,7 +34,6 @@ CREATE TABLE IF NOT EXISTS runs (
     payload      TEXT NOT NULL,
     created_at   TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_runs_user ON runs(user_id);
 
 CREATE TABLE IF NOT EXISTS users (
     user_id      TEXT PRIMARY KEY,
@@ -73,7 +72,24 @@ class SQLiteRepository:
         self._lock = threading.Lock()
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            self._migrate()
             self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Idempotent migrations for DBs created by an earlier phase.
+
+        `CREATE TABLE IF NOT EXISTS` never alters an existing table, so columns
+        added in a later phase (Phase 4: runs.user_id) must be back-filled here
+        before any index/insert touches them. Safe to run on every open.
+        """
+        run_cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(runs)")}
+        if "user_id" not in run_cols:
+            self._conn.execute(
+                "ALTER TABLE runs ADD COLUMN user_id TEXT NOT NULL DEFAULT 'local'"
+            )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_runs_user ON runs(user_id)"
+        )
 
     # --- shared market data ------------------------------------------------ #
     def put_edge(self, edge: dict[str, Any]) -> None:

@@ -18,6 +18,7 @@ from typing import Optional
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from .. import obs
 from ..config import Config, build_registry, build_repository, load_federation
 from ..domain.models import User
 from .auth import make_current_user_dependency
@@ -70,6 +71,17 @@ def get_orchestrator(config: Config = Depends(get_config)) -> RunOrchestrator:
 
 
 current_user = make_current_user_dependency(get_config, get_orchestrator)
+
+
+@app.on_event("startup")
+def _start_tracing() -> None:
+    # Initialize Arize AX tracing before any request runs the pipeline.
+    obs.setup_tracing()
+
+
+@app.on_event("shutdown")
+def _stop_tracing() -> None:
+    obs.shutdown_tracing()
 
 
 def reset_app_state() -> None:

@@ -18,6 +18,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Optional
 
+from .. import obs
 from ..domain.models import Layer
 from ..store.cache import Cache, Lock, RateLimiter
 from ..store.inproc import InProcCache, InProcRateLimiter, ThreadLock
@@ -155,6 +156,24 @@ class ProviderRegistry:
             )
 
     def _fetch_one(self, provider: Provider, q: Query) -> list[Quote]:
+        # Each provider attempt is a TOOL span (RETRIEVER for award/chart
+        # lookups — they retrieve seat/ratio data) so every scrape / API call
+        # shows up in the trace with its query and result count (§10).
+        kind = (
+            obs.KIND_RETRIEVER
+            if q.layer in _POOL_LAYERS
+            else obs.KIND_TOOL
+        )
+        with obs.span(
+            provider.name,
+            kind,
+            input_value=f"{q.layer.value} {q.route.key()} ({q.currency})",
+        ) as s:
+            quotes = self._fetch_one_inner(provider, q)
+            obs.set_output(s, f"{len(quotes)} quote(s)")
+            return quotes
+
+    def _fetch_one_inner(self, provider: Provider, q: Query) -> list[Quote]:
         key = self._cache_key(provider, q)
 
         # Cache-first: hits cost zero quota (§5).

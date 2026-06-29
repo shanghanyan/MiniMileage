@@ -14,6 +14,7 @@ dependencies = [
     "httpx>=0.27,<1.0",
     "fastapi>=0.115,<1.0",
     "uvicorn[standard]>=0.32,<1.0",
+    "python-dotenv>=1.0,<2.0",
 ]
 
 # Optional aggregator (Engine A) accelerators. The scraper runs with the stdlib
@@ -30,6 +31,13 @@ aggregator = [
 # back to the in-process stores, so single-user/local runs need nothing extra.
 multiuser = [
     "redis>=5.0",
+]
+
+# Arize AX tracing (§10). Without it, tracing is a no-op and the app runs
+# unchanged; install to emit OpenInference spans for each redemption run.
+observability = [
+    "arize-otel>=0.7",
+    "openinference-semantic-conventions>=0.1",
 ]
 
 [project.scripts]

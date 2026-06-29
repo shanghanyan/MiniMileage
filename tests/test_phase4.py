@@ -279,6 +279,41 @@ def test_redis_adapters() -> None:
     assert q.used("amadeus") == 0
 
 
+def test_migrates_pre_phase4_runs_table() -> None:
+    """A DB created before Phase 4 (runs without user_id) must migrate, not 500.
+
+    Regression: `CREATE TABLE IF NOT EXISTS` never adds a column to an existing
+    table, so opening an old DB used to crash on the runs(user_id) index.
+    """
+    import sqlite3
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = str(Path(tmp) / "old.db")
+        # Simulate a Phase 0–3 schema: runs has no user_id column.
+        conn = sqlite3.connect(path)
+        conn.executescript(
+            "CREATE TABLE runs (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "route_key TEXT NOT NULL, verdict TEXT, payload TEXT NOT NULL, "
+            "created_at TEXT NOT NULL);"
+            "INSERT INTO runs (route_key, verdict, payload, created_at) "
+            "VALUES ('LAX-JFK-economy', 'comparable', '{}', '2026-01-01T00:00:00');"
+        )
+        conn.commit()
+        conn.close()
+
+        # Opening through the repo must migrate in place (no exception).
+        repo = build_repository(Config(db_path=path))
+        cols = {r["name"] for r in repo._conn.execute("PRAGMA table_info(runs)")}
+        assert "user_id" in cols, "migration must add runs.user_id"
+
+        # New rows are scoped; the back-filled old row defaults to 'local'.
+        repo.record_run({"route_key": "LAX-IST-business", "user_id": "bob",
+                         "verdict": "best"})
+        assert len(repo.runs_for_user("bob")) == 1
+        assert len(repo.runs_for_user("local")) == 1  # the migrated legacy row
+        repo.close()
+
+
 def test_redis_backend_falls_back_when_unreachable() -> None:
     # Points at a port nothing is listening on -> build_stores must degrade.
     config = Config(redis_url="redis://127.0.0.1:6599/0")
@@ -298,6 +333,7 @@ if __name__ == "__main__":
     test_auth_resolution()
     test_api_auth_scopes_balances()
     test_redis_adapters()
+    test_migrates_pre_phase4_runs_table()
     test_redis_backend_falls_back_when_unreachable()
     print(
         "OK: shared cache (one scrape, both served), shared quota counter, "

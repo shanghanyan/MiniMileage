@@ -31,7 +31,25 @@ from .store.stores import StoreBundle
 log = logging.getLogger("mileage.config")
 
 _KNOWLEDGE_DIR = Path(__file__).resolve().parent / "knowledge"
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CURRENCY = "capital_one"
+
+
+def _load_dotenv() -> None:
+    """Load <repo>/.env into the environment if python-dotenv is installed.
+
+    Keys are read from the process environment (§4); a .env file is the
+    convenient local place to keep them. Absence of python-dotenv (or the file)
+    is a no-op — shell exports still work exactly as before.
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    load_dotenv(_REPO_ROOT / ".env")
+
+
+_load_dotenv()
 
 
 @dataclass
