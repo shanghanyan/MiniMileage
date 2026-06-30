@@ -56,6 +56,73 @@ targets:
     updated_at: "2026-06-29"
     layers: [charts]
 
+  # Turkish Miles&Smiles: AwardTravelFinder HTML guide (same domain/parser as
+  # Aeroplan + LifeMiles above; server-rendered, no WAF). Unblocks Demo B.
+  - name: atf-turkish-chart
+    url: https://awardtravelfinder.com/turkish-miles-guides
+    format: html_table_wide
+    program: turkish
+    provides: chart
+    trust: 0.80
+    updated_at: "2026-06-29"
+    layers: [charts]
+
+  # ANA Mileage Club: AwardTravelFinder HTML chart (server-rendered, no WAF).
+  # ANA publishes ROUND-TRIP charts; the wide parser + lookup normalize to
+  # one-way and flag `rt_to_ow_normalized` (§6 carried-over fix).
+  - name: atf-ana-chart
+    url: https://awardtravelfinder.com/award-charts/ana
+    format: html_table_wide
+    program: ana
+    provides: chart
+    trust: 0.80
+    updated_at: "2026-06-29"
+    layers: [charts]
+
+  # Singapore KrisFlyer: AwardTravelFinder HTML guide (server-rendered, no WAF).
+  - name: atf-krisflyer-chart
+    url: https://awardtravelfinder.com/singapore-krisflyer-guides
+    format: html_table_wide
+    program: krisflyer
+    provides: chart
+    trust: 0.80
+    updated_at: "2026-06-29"
+    layers: [charts]
+
+  # KrisFlyer official one-way saver chart PDF (direct CDN, not WAF-protected).
+  # Requires pdfplumber for binary extraction; gracefully returns [] without it.
+  # URL is the singaporeair.com dam pattern — confirm the exact filename with
+  # `mileage sources --validate-urls` before trusting (404 -> auto-marked DEAD).
+  - name: krisflyer-official-pdf
+    url: https://www.singaporeair.com/content/dam/krisflyer/award-charts/SingaporeAirlines-OneWay-AdvantageSaver-AwardChart.pdf
+    format: pdf
+    program: krisflyer
+    provides: chart
+    trust: 0.55
+    updated_at: "2026-06-29"
+    layers: [charts]
+
+  # 10xtravel blog fallbacks — single-program chart posts (wide cabin columns),
+  # server-rendered, no WAF. Lower trust: blog mirrors, used only when the ATF
+  # pages above are unavailable. Prose-heavy posts are the discovery agent's job.
+  - name: 10x-turkish-chart
+    url: https://10xtravel.com/turkish-airlines-award-charts/
+    format: html_table_wide
+    program: turkish
+    provides: chart
+    trust: 0.55
+    updated_at: "2026-06-29"
+    layers: [charts]
+
+  - name: 10x-ana-chart
+    url: https://10xtravel.com/ana-mileage-club-award-charts/
+    format: html_table_wide
+    program: ana
+    provides: chart
+    trust: 0.55
+    updated_at: "2026-06-29"
+    layers: [charts]
+
   # LifeMiles third-party PDF (thriftytraveler.com, zone matrix, 2022).
   # Requires pdfplumber; gracefully returns []. Trust low — outdated + third-party.
   # Useful only as a cross-check when ATF HTML is unavailable.
@@ -69,6 +136,15 @@ targets:
     layers: [charts]
 
   # ── L3 LIVE AWARD SPACE ────────────────────────────────────────────────────
+  #
+  # Candidate public L3 sources evaluated (NOT added — see notes):
+  #   - roame.travel/search + /skyview : lighter than airline sites, but no
+  #       documented JSON endpoint; test with curl_cffi before adding. If it ever
+  #       needs sensor data it becomes the Brain's problem (§8), not a target here.
+  #   - awardfares.com : publishes live availability but full data is account-
+  #       gated -> credentialed scraping is OUT (§8 boundary). Not a target.
+  #   - seats.aero Partner API : cleanest L3 path, wired as an OPTIONAL paid
+  #       provider (SeatsAeroProvider), off by default — not an aggregator target.
 
   # Placeholder fixture — stands in for a live seats.aero partner API call.
   # Real replacement: configure SEATS_AERO_KEY and wire SeatAeroProvider (§7).

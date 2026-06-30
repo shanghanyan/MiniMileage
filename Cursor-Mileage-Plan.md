@@ -128,10 +128,25 @@ mileage/
     aviationstack.py       # L1 schedules (weak fallback)
     seats_aero.py          # L3 award availability (OPTIONAL, paid — off by default)
     curated.py             # L4 ratios/charts from versioned YAML
-    aggregator/            # ENGINE A — real, working scraper (L3 default + L4)
+    aggregator/            # ENGINE A — real scraper + BOTH intake modes (§6, §6.1)
       __init__.py
-      fetch.py             # httpx + curl_cffi; Wayback / RSS / PDF fallbacks
+      fetch.py             # httpx + curl_cffi; Wayback / RSS / PDF fallbacks (shared by every intake)
       politeness.py        # adaptive throttle + source rotation (simple first)
+      parse.py             # bytes -> RawChartRow[] / RawAwardRow[] (selector-hit only)
+      sources.py provider.py  # INTAKE (a) deterministic: sources.yaml -> _build_charts -> AwardQuote[]
+      ingest/              # INTAKE (b) discovery — a normal sub-module of Engine A (§6.1, Phase 8)
+        __init__.py        #   NOT import-isolated like brain/; reuses Fetcher + jobs + Redis + Arize
+        email_source.py    # Gmail IMAP (app password) poll -> unread HTML bodies as documents
+        creators.py        # creators.yaml blog RSS -> Fetcher.get(post) -> readability body
+        transcripts.py     # youtube channel RSS -> youtube-transcript-api captions as documents
+        devaluation.py     # subject/title "{program} devaluation" -> bump that program's charts stale
+      extract/             # the LOCAL extractor every intake mode shares (§6.2) — no Anthropic
+        __init__.py
+        base.py            # LLMExtractor interface (swappable backend; local Qwen now)
+        local_extractor.py # Qwen2.5-Instruct via Ollama/llama.cpp + constrained decoding
+        grammar.gbnf       # GBNF schema: [{program,from,to,cabin,miles,roundtrip}] — output can't escape it
+        gliner_tagger.py   # GLiNER span tagger: verbatim entities, cannot hallucinate
+        grounding.py       # verbatim-number guard: drop any `miles` not literally in the source text
     brain/                 # ENGINE B — QUARANTINED, see §8
       README.md            # boundaries + "do not import from core"
   verify/
@@ -156,6 +171,7 @@ mileage/
 Rules that keep this honest:
 - `domain/` and `verify/` **never import** from `providers/`, `aggregator/`, or `brain/`. Dependencies point inward only.
 - A bandit/policy lives **inside** a provider as a swappable strategy; invisible to the core.
+- `aggregator/ingest/` + `aggregator/extract/` are **normal sub-modules of Engine A**, not a separate engine and **not** import-isolated like `brain/`. They may import the aggregator's own `fetch`/`parse`/`provider` and the shared `store`/`obs` infra, but the `domain/`/`verify/` core still never imports *them*. Everything they emit is a plain `AwardQuote` the core can't distinguish from a deterministic scrape.
 - `brain/` is import-isolated; the working product never depends on it.
 
 ---
@@ -201,6 +217,111 @@ You want the aggregator doing real work for **anything you can't reliably get fr
 - **Carried-over fixes:** adaptive per-domain throttle + backoff + jitter for 429s; `--validate-urls` + `last_404` health check for URL rot; round-trip→one-way normalization (ANA); freshness de-dupe; trust-weighted median with `sources_disagree_NN%`; source rotation → next target → Wayback on a block.
 - **Lightweight adaptiveness (optional, low-risk):** a small politeness/source-rotation policy that learns the fastest non-429 delay per domain. Scheduling efficiency, **not evasion**; starts hardcoded, stays there until volume justifies more.
 - **Output:** normalized `AwardQuote` with full provenance — identical contract to the API providers, so the verification core can't tell them apart.
+
+**Curated `sources.yaml` (this revision):** Turkish, ANA, and KrisFlyer now have explicit AwardTravelFinder (ATF) chart targets on the same non-WAF domain/parser already used for Aeroplan + LifeMiles, plus 10xtravel.com fallbacks and a KrisFlyer official-PDF target (pdfplumber, degrades to empty without it). All are `html_table_wide`/`pdf`, server-rendered, no WAF. L3 candidates (Roame, AwardFares) were evaluated and *not* added — Roame has no documented JSON endpoint (test with `curl_cffi` first; if it needs sensor data it's the Brain's, §8), and AwardFares' full data is account-gated (credentialed scraping is an §8 boundary). seats.aero remains the clean optional paid L3 path.
+
+**The aggregator has two intake modes feeding one pipeline.** Both end in the *same* `RawChartRow[] → _build_charts() → AwardQuote[]` path through `verify/` and `graph/`, so the core cannot tell them apart:
+
+- **(a) Deterministic** — the known URLs in `sources.yaml` parsed by the structural parsers above (today's behavior; `parse.py`/`provider.py`).
+- **(b) Discovery / ingest (§6.1)** — email + creator blogs + creator video transcripts, turned into structured rows by a **local** open-source extractor. This is *not* a separate engine; it is `aggregator/ingest/` + `aggregator/extract/`.
+
+---
+
+## 6.1 The aggregator's discovery intake mode — email + creator blogs + transcripts
+
+This is **intake mode (b) of the aggregator (Engine A)**, not a separate engine. The deterministic intake (§6) needs a human to add a URL to `sources.yaml`. The discovery intake removes that bottleneck: it pulls documents from three standing feeds — the agent's **mailbox**, creator **blogs**, and creator **video transcripts** — turns each into structured rows with a **local** extractor (§6.2), and emits the **same `AwardQuote`** through the **same `_build_charts() → verify → graph`** path. It lives in `aggregator/ingest/` + `aggregator/extract/` and, like everything in `providers/`, can be deleted without touching the core.
+
+**Honest framing — this is NOT the Brain (§8), and NOT import-isolated like it either.** Discovery only touches *public, server-rendered* content (blog posts, public RSS/captions) and *your own opt-in inbox* (newsletters you subscribed to). It does **no** WAF evasion, **no** sensor forging, **no** credentialed scraping of protected first-party sites — those are §8 boundaries. Unlike `brain/`, discovery is a normal sub-module of the aggregator: it freely reuses the aggregator's `Fetcher`/`parse`/`_build_charts` and the shared `store`/`obs` infra. The one rule it shares with every provider: the `domain/`/`verify/` core never imports *it*.
+
+**Three intakes, one extractor, one pipeline.** Email, blog body, and transcript are all just *documents*. Each flows: `document → LLMExtractor (§6.2) → RawChartRow[] → AggregatorProvider._build_charts() → AwardQuote[]`, tagged `flags=["llm_extracted"]` with a provenance `source_name` naming the intake:
+
+| Intake | Module | Discovery → fetch → document | Provenance `source_name` |
+|---|---|---|---|
+| Email | `ingest/email_source.py` | poll inbox (IMAP) → unread mail → HTML body | `email:{sender}` |
+| Blog | `ingest/creators.py` | `creators.yaml.blog_rss` → `Fetcher.get(post_url)` → readability body | `blog:{name}` |
+| Transcript | `ingest/transcripts.py` | channel RSS → `youtube-transcript-api(video_id)` captions | `yt:{name}` |
+
+The creator list is **`knowledge/creators.yaml`** (already stubbed): per creator a `blog_rss`, a `youtube.channel_id`, and a `trust` weight. `channel_id: TODO` entries are resolved **once** by loading the `@handle` page and reading the canonical `UC…` id (never guessed); every feed URL is confirmed with `mileage sources --validate-urls --force` before it is relied on. Daily Drop is email-first (no reliable RSS) → it arrives as `email:dailydrop`.
+
+**Email is a standing scraping feed (`occulosequor@gmail.com`).**
+- **Any received email is automatically ingested.** `ingest/email_source.py` polls the inbox on a schedule via the existing **`store/jobs.py`** queue (daily is fine; the Redis-list swap is the multi-worker upgrade, same interface), pulls **unread** mail, takes the **HTML body as a document**, and runs it through the local extractor like any other page. No human action after the one-time subscribe.
+- **Auth: IMAP App Password only.** `GMAIL_ADDRESS` + `GMAIL_APP_PASSWORD` in `.env`, read from the environment, never in code. **No Gmail API, no OAuth, no Cloud Pub/Sub** — polling is sufficient and far less to build/secure. (The old `GMAIL_OAUTH_*` keys are dropped from the discovery path.)
+- **Devaluation fast-path (`ingest/devaluation.py`):** a subject matching `"{program} devaluation"` / `"award chart change"` immediately bumps that program's charts to `stale` in the store, rather than waiting for the next scheduled run to notice. (Mechanism in §6.2 — it lives in `store/`, so `domain/`/`verify/` are untouched.)
+
+**Blogs and transcripts — scrape the creators the mailbox follows.**
+- **Blogs:** poll each `blog_rss`, fetch new post URLs through the **existing `Fetcher.get()`** (unchanged: same politeness, Wayback/PDF fallbacks, `file://` fixtures), readability-extract the article body, extract.
+- **Transcripts:** discover new videos via the channel RSS feed (`https://www.youtube.com/feeds/videos.xml?channel_id=<UC…>`), pull captions with **no API key** — `youtube-transcript-api` (preferred) or `yt-dlp --write-auto-sub --skip-download` as fallback — and treat the transcript text as a document.
+
+**Anti-hallucination — discovered rows are second-class until independently confirmed (§5/§7).** Every `llm_extracted` row is subject to the guards in §6.2 (constrained decoding + verbatim-number grounding), then enters the **same `verify/crosscheck.py`** as everything else: it cross-checks against curated `knowledge/charts.yaml`, agreement elevates confidence, disagreement adds `sources_disagree_NN%` and demotes. Because `crosscheck` keys independence on `source_name`, a blog and a transcript that merely echo the same post are **not** independent. A winner resting on an `llm_extracted` row can only ever be `tentative_best`, never `best`, until a genuinely independent source confirms it.
+
+**Reuses existing infra — no new services:**
+- **Redis (§9):** `Cache` for URL/email/video de-dupe (don't re-extract the same document within TTL); `RateLimiter` throttles outbound fetches; `Lock` (`SETNX`) so two runs don't extract the same post.
+- **Jobs (`store/jobs.py`):** the inbox poll + blog/transcript sweeps are submitted as background jobs off the request path.
+- **Arize (§10):** a discovery run is a CHAIN span (`discover`); each `LLMExtractor` call is an **LLM span** with the raw document in and the JSON rows out — exactly the extraction use-case OTel tracing is for (extraction accuracy per source, where the grounding guard caught a hallucinated number).
+
+**Honest caveat:** LLM extraction of charts from prose is good, not perfect — posts/transcripts describe *sweet spots* more than full zone matrices, so headline numbers come through but edge-case zones may be missed. Constrained decoding + the verbatim-number guard + the `llm_extracted` flag + cross-check against curated YAML is the safety net: it cannot invent a number, and an unconfirmed number never becomes a `best`.
+
+---
+
+## 6.2 The local extractor (`aggregator/extract/`) — model, constrained decoding, grounding
+
+**No Anthropic. No cloud key in the discovery path.** The extractor runs locally behind a small `LLMExtractor` interface so the backend is swappable (local Qwen now; a different local model, or a hosted one, is a config swap — nothing hardwired). Search keys (`BING_SEARCH_API_KEY` / `SERPAPI_API_KEY`) stay **optional**; `ANTHROPIC_API_KEY` is removed from this path.
+
+```python
+# aggregator/extract/base.py
+class LLMExtractor(Protocol):
+    def extract(self, document: str, *, source_hint: str = "") -> list[RawChartRow]:
+        """Prose/HTML/transcript -> schema-valid, number-grounded chart rows."""
+```
+
+**Model choice — `Qwen2.5-7B-Instruct` (3B-Instruct for a CPU/12 GB-light build).** Justification:
+- **Local, open-weight, commercially usable (Apache-2.0)** — satisfies the "no cloud key" hard requirement and keeps every document on-device (the mailbox is private mail).
+- **Right size for structured extraction.** This is span-copying, not reasoning; a 7B instruct model is comfortably enough and **QLoRA-trains + serves on a single 12 GB consumer GPU** (§6.3). 3B is the CPU-friendly fallback with the same toolchain.
+- **First-class constrained-decoding support** in both serving paths we'd use (llama.cpp GBNF; Outlines/XGrammar on vLLM).
+- **Alternatives considered:** *Llama-3.1-8B-Instruct* — fine, slightly heavier, similar story; *Phi-3.5-mini* — great on CPU but weaker on long messy HTML; *gemma-2-9b* — capable but larger and license is more restrictive; hosted GPT/Claude — **rejected**, reintroduces the cloud key we are removing. Qwen2.5 is the best size/license/tooling fit; the `LLMExtractor` interface means any of these is a drop-in if that changes.
+
+**Serving:** **Ollama** for the easy local path (`ollama run qwen2.5:7b-instruct`, GBNF grammar via the `format`/grammar option), or **llama.cpp** directly when we want the GGUF + GBNF grammar pinned. vLLM + Outlines/XGrammar is the throughput option if discovery volume grows. All three sit behind the same `LLMExtractor`.
+
+**Constrained decoding is mandatory — not retry-on-failure.** The decoder is constrained to the exact schema so output *physically cannot* escape it:
+
+```gbnf
+# aggregator/extract/grammar.gbnf  (sketch)
+root    ::= "[" (row ("," row)*)? "]"
+row     ::= "{" "\"program\":" str "," "\"from\":" str "," "\"to\":" str ","
+            "\"cabin\":" cabin "," "\"miles\":" int "," "\"roundtrip\":" bool "}"
+cabin   ::= "\"economy\"" | "\"premium_economy\"" | "\"business\"" | "\"first\""
+int     ::= [0-9]+
+bool    ::= "true" | "false"
+str     ::= "\"" ([^"\\] | "\\" .)* "\""
+```
+
+The schema mirrors `RawChartRow` exactly (`program, from→region_a, to→region_b, cabin, miles, roundtrip`), so the extractor's output drops straight into the existing `_build_charts()` with no new parsing surface. `cabin` is constrained to the four canonical values the parser already accepts.
+
+**Two anti-hallucination guards on top of constrained decoding (§5):**
+1. **Verbatim-number grounding (`extract/grounding.py`) — the hard guard.** Reject any row whose `miles` integer does **not** appear literally in the source text (comma/spacing-insensitive). Numbers are the one thing we cannot afford to invent; a schema-valid row with a fabricated number is the dangerous failure mode, and this kills it deterministically before it ever becomes an `AwardQuote`.
+2. **GLiNER span tagger (`extract/gliner_tagger.py`) — complementary.** GLiNER extracts entity spans *verbatim* from the text (program names, cabins, city/zone names) and **cannot hallucinate** them. Use it to (a) pre-tag candidate program/zone/cabin spans to focus the extractor, and (b) cross-validate the LLM's `program`/`cabin`/region fields against spans that actually occur in the document; a field with no supporting span is dropped. The model is also prompted to **omit any row it is unsure of rather than guess.**
+
+**Devaluation → stale mechanism (no `domain/`/`verify/` changes).** A new `store/` method records a per-program `marked_stale_at`; when the aggregator emits chart quotes it consults it and, for a flagged program, attaches the `stale` flag (and caps `source_updated_at` before the freshness cutoff). `verify/crosscheck.py` already carries `q.flags` through and already demotes anything flagged `stale` — so proactive staleness is purely additive on the `store` + emission side.
+
+## 6.3 Fine-tuning & evaluation (propose, do not run yet)
+
+**Fine-tuning — QLoRA via Unsloth on `Qwen2.5-7B-Instruct`.** 4-bit base + trained low-rank adapters; fits the 12 GB GPU and serves through the same Ollama/llama.cpp path (merge adapters → GGUF, or load adapters at runtime). LoRA, not full fine-tune, so the artifact is a few hundred MB and the base stays swappable.
+- **Dataset = `(source_text → JSON rows)` pairs from our own corpus.** Seed from the ATF / 10xtravel chart pages we already fetch plus a sample of creator posts/transcripts. Bootstrap a few hundred examples; **hand-correct every number**; hold out a test split. Optionally distill labels *once* from a stronger model to seed, **then human-verify** — no unverified label enters training, the same no-hallucination contract the runtime enforces.
+- **Why fine-tune at all:** the stock 7B already does the job with constrained decoding; QLoRA buys higher recall on messy blog/transcript layouts and fewer omitted rows, without changing the safety guarantees (constrained decoding + grounding still gate the output).
+
+**Eval — an offline extraction-accuracy harness wired like `mileage/evals.py`.**
+- **Metrics:** row-level precision/recall against a labeled fixture set, and **exact-match on the `miles` integer** (the number that matters), plus a hallucination counter = rows the grounding guard rejected. Runs deterministically/offline (fixtures via the existing `_OfflineFetcher` pattern) and **exits non-zero on regression**, so extraction quality is a CI gate, not a vibe.
+- **Arize LLM spans:** raw document in, JSON rows out, with the grounding-guard verdict on each row — so we can watch extraction accuracy per source over time and *see exactly where* a hallucinated number got caught.
+
+**Dependency list (all local / keyless for the core path; add to a `discovery` extra):**
+- `youtube-transcript-api` (captions; `yt-dlp` optional fallback)
+- `feedparser` (blog + channel RSS; already an optional aggregator accelerator)
+- a readability extractor (`trafilatura` or `readability-lxml`) for blog/email bodies
+- `gliner` (verbatim entity spans)
+- a local LLM server: **Ollama** (simplest) or `llama-cpp-python` (GGUF + GBNF); `outlines`/`xgrammar` + `vllm` only if we move to the GPU-throughput path
+- fine-tuning (dev-only, not runtime): `unsloth`, `peft`, `trl`, `bitsandbytes`
+- **stdlib** `imaplib` + `email` for the mailbox — **no new Gmail dependency**
+- **Optional, not required:** `BING_SEARCH_API_KEY` / `SERPAPI_API_KEY` for active search. **Removed:** `ANTHROPIC_API_KEY`, `GMAIL_OAUTH_*`.
 
 ---
 
@@ -264,6 +385,8 @@ Skip dual Phoenix + Grafana until there's ML to observe. For Phases 0–2: struc
 | Schedules / fares APIs | Amadeus Self-Service (primary), Travelpayouts, AeroDataBox, aviationstack | ✓ tiers | same |
 | Award availability | **Aggregator (default)**; seats.aero Partner API (optional) | ✓ / paid | same |
 | Aggregator fetch | httpx, curl_cffi, Wayback/RSS/PDF | ✓ | same (server-side) |
+| Discovery intake (§6.1) | IMAP (`imaplib`), `feedparser`, `youtube-transcript-api`, readability | ✓ keyless | same (server-side) |
+| Local extractor (§6.2) | Qwen2.5-Instruct via Ollama/llama.cpp + GBNF constrained decoding + GLiNER | ✓ local | same (self-hosted / GPU) |
 | Protected fetch (Brain) | nodriver, Camoufox/Patchright — **quarantined** | ✓ | server-side only |
 | Verification / graph | NetworkX + verify/ logic | ✓ | same |
 | Durable store | SQLite → Turso / Supabase | ✓ | Turso / Supabase |
@@ -318,6 +441,11 @@ Both demos run end-to-end from Phase 0 onward; each phase makes them *more* trus
 **Deliverable:** an isolated research module that can attempt a WAF'd source, falling back to the aggregator on failure.
 **Demo:** point it at a single WAF'd public chart → it either returns verified rows or cleanly degrades to the aggregator; the working product is unaffected either way.
 
+### Phase 8 — The aggregator's discovery intake mode (§6.1/§6.2)
+**Build:** `providers/aggregator/ingest/` — `email_source.py` (IMAP app-password inbox poll → unread HTML docs), `creators.py` (blog RSS → `Fetcher.get` → readability body), `transcripts.py` (channel RSS → `youtube-transcript-api` captions), `devaluation.py` (subject match → bump program charts `stale` via a `store/` method) — plus `providers/aggregator/extract/` — the local `LLMExtractor` (`base.py`), `local_extractor.py` (Qwen2.5-Instruct via Ollama/llama.cpp), `grammar.gbnf` (constrained decoding to the `RawChartRow` schema), `gliner_tagger.py`, and `grounding.py` (verbatim-number guard). Reads `knowledge/creators.yaml`. Reuses the existing `Fetcher`, the `store/jobs.py` queue, Redis (`Cache`/`RateLimiter`/`Lock`), and Arize (a `discover` CHAIN span + per-extraction LLM spans). **No Anthropic key, no Gmail API/OAuth, no new services.** Nothing in `domain/`/`verify/` changes — discovered rows are plain `llm_extracted` `AwardQuote`s that enter the same `_build_charts → verify → graph` pipeline and cross-check against curated YAML.
+**Deliverable:** `sources.yaml` stops being the only L4 intake: the aggregator ingests subscribed newsletters, new creator blog posts, and new video transcripts automatically, emitting normalized, provenance-tagged (`email:`/`blog:`/`yt:`), constrained-decoded, number-grounded, cross-checked `AwardQuote`s. Devaluation emails bump affected charts to `stale` proactively. An offline extraction-accuracy eval (§6.3) gates the extractor in CI.
+**Demo:** run `mileage discover` → it polls the inbox, fetches new blog posts and pulls video captions, runs each through the **local** extractor (watch the GBNF-constrained JSON + the grounding guard reject any number not in the source), cross-checks against curated charts (agreement elevates confidence, conflict flags `sources_disagree`), and emits `tentative_best`-only rows. A planted "Turkish devaluation" email flips Turkish's charts to `stale`.
+
 ### Phase 7 — Go horizontal (the north star)
 **Build:** add currencies (Amex MR, Chase UR, Citi TYP, Bilt), more programs/alliances, and limited-time transfer-bonus alerts.
 **Deliverable:** the multi-card "Expedia for points."
@@ -331,10 +459,19 @@ Both demos run end-to-end from Phase 0 onward; each phase makes them *more* trus
 - **Multi-user:** yes, future phase (Phase 4). Interfaces built in from Phase 0; Redis/Upstash + Turso/Supabase + auth land at Phase 4.
 - **Award space:** **aggregator first**; seats.aero wired as an *optional* paid provider, off by default.
 - **Demos:** keep **both** (A = honesty, B = value), run side by side every phase.
+- **L4 chart sources (this revision):** Turkish / ANA / KrisFlyer added to `sources.yaml` against ATF (same parser as Aeroplan/LifeMiles) + 10xtravel fallbacks + KrisFlyer official PDF. Roame/AwardFares evaluated and **not** added (no public endpoint / account-gated).
+- **Discovery intake mode (§6.1, NOT a separate engine):** email + creator-blog + creator-transcript ingestion is **intake mode (b) of the aggregator (Engine A)** — `aggregator/ingest/` + `aggregator/extract/`, feeding the same `_build_charts → verify → graph` pipeline as `sources.yaml`. The mailbox `occulosequor@gmail.com` is a standing feed: **any received mail is auto-ingested** via a scheduled IMAP poll on the existing jobs queue (**App Password only — no Gmail API/OAuth/Pub/Sub**). Blogs/transcripts come from `knowledge/creators.yaml` (RSS + `youtube-transcript-api`, no API key). The extractor is **local and open-source (Qwen2.5-Instruct + mandatory constrained decoding + a verbatim-number grounding guard + GLiNER)** — **`ANTHROPIC_API_KEY` is removed from this path.** Public/opt-in content only; it is **not** the Brain (no Akamai, no credentialed scraping) and **not** import-isolated like `brain/`.
 
-**Still open (don't block Phase 0):**
-1. **Demo B's exact route/program** — pick one international premium redemption to optimize the showcase around (e.g. LAX→IST via Turkish, or SFO→NRT via ANA).
-2. **Proxy budget & legal posture** for the eventual Brain (Phase 6) — only matters if a WAF'd first-party source becomes necessary.
-3. **Hosting target** for Phase 4 (Supabase end-to-end vs. mix of Fly/Vercel/Upstash/Turso) — decide when you actually deploy.
+**Recommended next steps (priority order):**
+1. **Done — Turkish/ANA/KrisFlyer added to `sources.yaml`** pointing at ATF; unblocks Demo B with real chart data once live.
+2. **Run `mileage sources --validate-urls --force`** against the new HTTP/PDF targets to confirm ATF pages still serve and the table structure matches the `html_table_wide` parser (the KrisFlyer PDF filename especially — it's a best-effort URL pending confirmation).
+3. **(Optional) Add a curated KrisFlyer baseline** to `knowledge/charts.yaml` so scraped KrisFlyer rows have an independent cross-check — *only with sourced numbers* (no hallucinated charts; that's the §2.1 contract).
+4. **Build the discovery intake (Phase 8):** local extractor + IMAP/RSS/transcript intakes under `aggregator/ingest/` + `aggregator/extract/` — the most durable fix for keeping charts fresh. Resolve the `channel_id: TODO` entries in `creators.yaml` first and `--validate-urls` every feed.
+5. **Decide seats.aero vs. Roame for L3** — the discovery intake covers L4 well; L3 live space still needs a dedicated source.
+
+**Still open (don't block current work):**
+1. **Proxy budget & legal posture** for the eventual Brain (Phase 6) — only matters if a WAF'd first-party source becomes necessary.
+2. **Hosting target** for Phase 4 (Supabase end-to-end vs. mix of Fly/Vercel/Upstash/Turso) — decide when you actually deploy.
+3. **Local extractor serving path** for the discovery intake — Ollama (simplest) vs. llama.cpp GGUF+GBNF vs. vLLM+Outlines (throughput) — and whether to ship the stock Qwen2.5 or the QLoRA-tuned adapter (§6.3) first. *(Gmail auth is settled: IMAP App Password only.)*
 
 Tell me to start **Phase 0** and I'll scaffold `domain/` (the source-agnostic `AwardQuote`/`FareQuote`/`User` models, `cpp.py`, `verdict.py`), the `Provider` interface + registry, the `Repository`/`Cache`/`RateLimiter`/`Lock` interfaces with in-process impls, a seeded `knowledge/ratios.yaml` + `charts.yaml`, and a `cli.py` that runs both demos end-to-end.

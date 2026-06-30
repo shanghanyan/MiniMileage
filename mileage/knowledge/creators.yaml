@@ -1,0 +1,95 @@
+# Creator intake list for the aggregator's DISCOVERY mode (§6.1).
+#
+# This is part of the aggregator (Engine A), NOT a separate engine. Two public,
+# opt-in source types per creator — blog RSS feeds and YouTube channels — both
+# flow through the SAME local extractor -> RawChartRow[] -> _build_charts ->
+# AwardQuote[] pipeline as everything else. No WAF, no credentialed scraping.
+#
+# Discovery flow:
+#   blogs : poll blog_rss -> Fetcher.get(post_url) -> readability body -> extractor
+#   video : poll youtube feed -> youtube-transcript-api(video_id) -> transcript -> extractor
+#   email : the occulosequor@gmail.com inbox (newsletters) is the third intake,
+#           handled separately; Daily Drop's primary intake is email, not RSS.
+#
+# Provenance tags: "blog:{name}" / "yt:{name}" / "email:{sender}". All carry the
+# llm_extracted flag and can only ever produce `tentative_best`, never `best`,
+# until an INDEPENDENT source confirms (cross-check vs knowledge/charts.yaml).
+#
+# VERIFY BEFORE TRUSTING (no-hallucination contract):
+#   * Blog feeds below use the standard WordPress `/feed/` convention — confirm
+#     each with `mileage sources --validate-urls --force` before relying on it.
+#   * YouTube RSS feed URL = https://www.youtube.com/feeds/videos.xml?channel_id=<UC...>
+#   * channel_id values that are filled in were read from canonical youtube.com/channel/<id>
+#     URLs (verifiable). Any channel_id marked TODO must be resolved ONCE by loading
+#     youtube.com/<handle> and reading the canonical id — DO NOT guess a UC string.
+
+creators:
+
+  # ── blog-first creators (RSS + some video) ────────────────────────────────
+  - name: frequent_miler
+    blog_rss: https://frequentmiler.com/feed/        # verify
+    youtube:
+      handle: "@FrequentMiler"
+      channel_id: UCtaZ_9VeGs9WwAEgL7WcVFA           # verified from channel URL
+    trust: 0.55
+
+  - name: one_mile_at_a_time
+    blog_rss: https://onemileatatime.com/feed/        # verify
+    youtube: null
+    trust: 0.55
+
+  - name: the_points_guy
+    blog_rss: https://thepointsguy.com/feed/          # verify
+    youtube:
+      handle: "@thepointsguy"
+      channel_id: UCBkJ4r-eLl8XAjg30dW8oIw           # verified — "TPG | Departures"
+    trust: 0.50                                       # heavily affiliate-driven; weight low
+
+  - name: thrifty_traveler
+    blog_rss: https://thriftytraveler.com/feed/       # verify
+    youtube: null
+    trust: 0.55
+
+  - name: ten_x_travel
+    blog_rss: https://10xtravel.com/feed/             # verify
+    youtube: null
+    trust: 0.55
+
+  - name: upgraded_points
+    blog_rss: https://upgradedpoints.com/feed/        # verify
+    youtube: null
+    trust: 0.50
+
+  - name: daily_drop
+    blog_rss: null   # TODO — Daily Drop is a newsletter platform; RSS uncertain.
+    youtube: null    # Primary intake is the email newsletter -> source_name="email:dailydrop"
+    trust: 0.45
+
+  # ── video-first creators (transcripts via youtube-transcript-api) ─────────
+  - name: lukes_points_and_miles
+    blog_rss: null
+    youtube:
+      handle: "@LukesPointsandMiles"
+      channel_id: UCU8_ZlRsvvGoinB8RnKC7qA           # verified from channel URL
+    trust: 0.45
+
+  - name: lets_get_to_the_points
+    blog_rss: https://letsgettothepoints.com/feed/    # verify
+    youtube:
+      handle: "@LetsGetToThePoints"
+      channel_id: TODO   # resolve once from the handle; do NOT guess
+    trust: 0.45
+
+  - name: award_travel_101
+    blog_rss: null
+    youtube:
+      handle: "@awardtravel101"
+      channel_id: TODO   # only /c/awardtravel101 vanity URL found; resolve once
+    trust: 0.45
+
+  - name: max_miles_points
+    blog_rss: null
+    youtube:
+      handle: "@maxmilespoints"
+      channel_id: UCMIftenASZwDCmalbdEwUig           # verified from channel URL
+    trust: 0.45
