@@ -90,21 +90,48 @@ def write_discovered(
     Path(path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+from .devaluation import (  # noqa: E402
+    detect_devaluation,
+    mark_devaluations_stale,
+)
 from .email_source import (  # noqa: E402  (re-export after helpers are defined)
     EmailDocument,
-    detect_devaluation,
     fetch_email_documents,
     run_discovery,
 )
+from .creators import (  # noqa: E402
+    Creator,
+    IntakeResult,
+    load_creators,
+    poll_blog,
+    run_blog_intake,
+)
+from .transcripts import (  # noqa: E402
+    poll_channel,
+    resolve_channel_id,
+    run_transcript_intake,
+)
+from .orchestrate import DiscoverResult, run_all_intakes  # noqa: E402
 
 __all__ = [
+    "Creator",
     "DiscoveredRow",
+    "DiscoverResult",
     "EmailDocument",
+    "IntakeResult",
     "detect_devaluation",
     "discovered_path",
     "fetch_email_documents",
+    "load_creators",
     "load_discovered_rows",
     "load_stale_programs",
+    "mark_devaluations_stale",
+    "poll_blog",
+    "poll_channel",
+    "resolve_channel_id",
+    "run_all_intakes",
+    "run_blog_intake",
     "run_discovery",
+    "run_transcript_intake",
     "write_discovered",
 ]

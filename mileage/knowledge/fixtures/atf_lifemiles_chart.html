@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head><title>Avianca LifeMiles Award Chart (2026) | Award Travel Finder</title></head>
+<body>
+  <!-- Decoy navigation table: the chart is NOT the first <table> on real ATF
+       pages, so the parser must select by header, not position. -->
+  <nav>
+    <table>
+      <tr><th>Programs</th><th>Cards</th><th>Tools</th></tr>
+      <tr><td>LifeMiles</td><td>Capital One</td><td>Award Map</td></tr>
+    </table>
+  </nav>
+
+  <h1>Avianca LifeMiles Award Chart (2026)</h1>
+  <p>One-way saver miles per zone pair. Source: LifeMiles, verified Jun 2026.</p>
+
+  <!-- A real ATF "wide" ZONE-PAIR chart: raw From/To labels with spaces and
+       title-case (NOT the canonical snake_case the curated fixtures use), plus a
+       deliberately unmapped zone ("Antarctica") that must be DROPPED, not
+       guessed. This is the §A bug-proving fixture. -->
+  <table>
+    <thead>
+      <tr><th>From</th><th>To</th><th>Economy</th><th>Business</th><th>First</th><th>Note</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>North America</td><td>Europe</td><td>30,000</td><td>63,000</td><td>78,000</td><td>Saver</td></tr>
+      <tr><td>North America</td><td>North America</td><td>12,500</td><td>25,000</td><td>&mdash;</td><td>Saver</td></tr>
+      <tr><td>North America</td><td>North Asia</td><td>40,000</td><td>75,000</td><td>90,000</td><td>Saver</td></tr>
+      <tr><td>North America</td><td>Antarctica</td><td>99,000</td><td>199,000</td><td>299,000</td><td>Unmapped zone — must be dropped</td></tr>
+    </tbody>
+  </table>
+
+  <h2>FAQ</h2>
+  <table>
+    <tr><th>Question</th><th>Answer</th></tr>
+    <tr><td>What is the chart?</td><td>Fixed partner pricing.</td></tr>
+  </table>
+</body>
+</html>

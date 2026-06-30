@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  FIXTURE — stands in for a creator's blog RSS feed (§6.1, intake B). The blog
+  intake diffs new post URLs against the Cache and fetches each via the existing
+  Fetcher; here the post link points at a sibling fixture so the whole intake
+  runs offline and deterministically.
+-->
+<rss version="2.0">
+  <channel>
+    <title>Frequent Miler — sweet spots</title>
+    <link>https://frequentmiler.example/</link>
+    <description>Award chart sweet spots.</description>
+    <item>
+      <title>This week's transferable-points sweet spots</title>
+      <link>https://frequentmiler.example/posts/sweet-spots</link>
+      <pubDate>Mon, 29 Jun 2026 09:00:00 +0000</pubDate>
+    </item>
+  </channel>
+</rss>

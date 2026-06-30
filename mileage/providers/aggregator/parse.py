@@ -26,6 +26,12 @@ from html.parser import HTMLParser
 from typing import Optional
 from xml.etree import ElementTree
 
+from .regions import (
+    canonicalize_region,
+    canonicalize_zone_pair,
+    parse_distance_band,
+)
+
 log = logging.getLogger("mileage.aggregator.parse")
 
 _CABINS = {"economy", "premium_economy", "business", "first"}
@@ -51,6 +57,10 @@ class RawChartRow:
     miles: int
     roundtrip: bool = False
     updated_at: Optional[str] = None
+    # Distance-banded charts (Aeroplan): the great-circle [lo, hi] mile range the
+    # row applies to. None for ordinary zone-pair charts (§A.4).
+    distance_min: Optional[int] = None
+    distance_max: Optional[int] = None
 
 
 @dataclass
@@ -203,7 +213,12 @@ def _select_wide_table(tables: list["_ParsedTable"]) -> Optional["_ParsedTable"]
     return None
 
 
-def parse_chart_html(text: str, *, updated_at: Optional[str] = None) -> list[RawChartRow]:
+def parse_chart_html(
+    text: str,
+    *,
+    updated_at: Optional[str] = None,
+    stats: Optional[dict] = None,
+) -> list[RawChartRow]:
     parser = _ChartTableParser()
     try:
         parser.feed(text)
@@ -218,6 +233,7 @@ def parse_chart_html(text: str, *, updated_at: Optional[str] = None) -> list[Raw
     idx = {name: i for i, name in enumerate(table.header)}
 
     out: list[RawChartRow] = []
+    dropped = 0
     for cells in table.rows:
         if len(cells) < len(required):
             continue
@@ -225,18 +241,27 @@ def parse_chart_html(text: str, *, updated_at: Optional[str] = None) -> list[Raw
         cabin = cells[idx["cabin"]].strip().lower()
         if miles is None or cabin not in _CABINS:
             continue  # selector miss -> drop, never guess
+        region_a = canonicalize_region(cells[idx["from"]])
+        region_b = canonicalize_region(cells[idx["to"]])
+        if region_a is None or region_b is None:
+            dropped += 1  # unmappable zone -> drop + count, never guess (§A)
+            continue
         rt = _to_bool(cells[idx["roundtrip"]]) if "roundtrip" in idx else False
         out.append(
             RawChartRow(
                 program=cells[idx["program"]].strip().lower(),
-                region_a=cells[idx["from"]].strip().lower(),
-                region_b=cells[idx["to"]].strip().lower(),
+                region_a=region_a,
+                region_b=region_b,
                 cabin=cabin,
                 miles=miles,
                 roundtrip=rt,
                 updated_at=updated_at,
             )
         )
+    if stats is not None:
+        stats["dropped"] = stats.get("dropped", 0) + dropped
+    if dropped:
+        log.info("html chart: dropped %d row(s) with uncanonicalizable region", dropped)
     return out
 
 
@@ -245,6 +270,7 @@ def parse_chart_html_wide(
     *,
     program: str,
     updated_at: Optional[str] = None,
+    stats: Optional[dict] = None,
 ) -> list[RawChartRow]:
     """Parse a 'wide' award chart HTML table.
 
@@ -274,6 +300,10 @@ def parse_chart_html_wide(
 
     # Accept 'to' (LifeMiles zone pairs) or 'distance' (Aeroplan distance bands)
     zone_col = next((c for c in ("to", "distance") if c in idx), None)
+    if zone_col is None:
+        log.info("html_wide: no 'to'/'distance' column on the chart table")
+        return []
+    is_distance = zone_col == "distance"
 
     # Collect cabin columns in header order
     cabin_cols: list[tuple[str, str]] = []  # (header_key, canonical_cabin)
@@ -284,13 +314,35 @@ def parse_chart_html_wide(
 
     out: list[RawChartRow] = []
     prog = program.strip().lower()
+    dropped = 0
     for cells in table.rows:
         if len(cells) <= max(idx["from"], idx[zone_col]):
             continue
-        region_a = cells[idx["from"]].strip().lower()
-        region_b = cells[idx[zone_col]].strip().lower()
-        if not region_a or not region_b:
+        raw_a = cells[idx["from"]].strip()
+        raw_b = cells[idx[zone_col]].strip()
+        if not raw_a or not raw_b:
             continue
+
+        # Canonicalize the geography (§A). Two shapes:
+        #   - distance charts: `from` names a zone PAIR, `distance` is the band.
+        #   - zone-pair charts: `from` and `to` are each one zone.
+        dist_min: Optional[int] = None
+        dist_max: Optional[int] = None
+        if is_distance:
+            pair = canonicalize_zone_pair(raw_a)
+            band = parse_distance_band(raw_b)
+            if pair is None or band is None:
+                dropped += 1
+                continue
+            region_a, region_b = pair
+            dist_min, dist_max = band
+        else:
+            region_a = canonicalize_region(raw_a)
+            region_b = canonicalize_region(raw_b)
+            if region_a is None or region_b is None:
+                dropped += 1  # unmappable zone -> drop + count, never guess (§A)
+                continue
+
         for label, canonical in cabin_cols:
             col_i = idx[label]
             if col_i >= len(cells):
@@ -307,8 +359,14 @@ def parse_chart_html_wide(
                     miles=miles,
                     roundtrip=False,
                     updated_at=updated_at,
+                    distance_min=dist_min,
+                    distance_max=dist_max,
                 )
             )
+    if stats is not None:
+        stats["dropped"] = stats.get("dropped", 0) + dropped
+    if dropped:
+        log.info("html_wide chart: dropped %d uncanonicalizable row(s)", dropped)
     return out
 
 
@@ -356,12 +414,13 @@ def parse_award_json(text: str) -> list[RawAwardRow]:
     return out
 
 
-def parse_chart_json(text: str) -> list[RawChartRow]:
+def parse_chart_json(text: str, *, stats: Optional[dict] = None) -> list[RawChartRow]:
     data = _load_json(text)
     records = data.get("charts") if isinstance(data, dict) else data
     if not isinstance(records, list):
         return []
     out: list[RawChartRow] = []
+    dropped = 0
     for r in records:
         if not isinstance(r, dict):
             continue
@@ -369,17 +428,24 @@ def parse_chart_json(text: str) -> list[RawChartRow]:
         cabin = str(r.get("cabin", "")).strip().lower()
         if miles is None or cabin not in _CABINS:
             continue
+        region_a = canonicalize_region(str(r.get("from", "")))
+        region_b = canonicalize_region(str(r.get("to", "")))
+        if region_a is None or region_b is None:
+            dropped += 1  # unmappable zone -> drop + count, never guess (§A)
+            continue
         out.append(
             RawChartRow(
                 program=str(r.get("program", "")).strip().lower(),
-                region_a=str(r.get("from", "")).strip().lower(),
-                region_b=str(r.get("to", "")).strip().lower(),
+                region_a=region_a,
+                region_b=region_b,
                 cabin=cabin,
                 miles=miles,
                 roundtrip=_to_bool(r.get("roundtrip", False)),
                 updated_at=r.get("updated_at"),
             )
         )
+    if stats is not None:
+        stats["dropped"] = stats.get("dropped", 0) + dropped
     return out
 
 

@@ -56,6 +56,12 @@ CREATE TABLE IF NOT EXISTS source_health (
     last_404     INTEGER NOT NULL DEFAULT 0,
     checked_at   TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS program_staleness (
+    program         TEXT PRIMARY KEY,
+    marked_stale_at TEXT NOT NULL,
+    reason          TEXT
+);
 """
 
 
@@ -71,6 +77,17 @@ class SQLiteRepository:
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
         with self._lock:
+            # WAL improves concurrency and is more tolerant of the synced/mounted
+            # folders that raised "disk I/O error" in review sandboxes. Best
+            # effort: an in-memory or restrictive FS may reject it.
+            try:
+                self._conn.execute("PRAGMA journal_mode=WAL")
+            except sqlite3.Error as exc:  # pragma: no cover - FS-dependent
+                import logging
+
+                logging.getLogger("mileage.store").info(
+                    "could not enable WAL on %s: %s", path, exc
+                )
             self._conn.executescript(_SCHEMA)
             self._migrate()
             self._conn.commit()
@@ -90,6 +107,20 @@ class SQLiteRepository:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_runs_user ON runs(user_id)"
         )
+        # Phase 8b: rot-detection counters on source_health (§F/§G). Added here so
+        # DBs from an earlier phase gain the columns without a destructive rebuild.
+        health_cols = {
+            r["name"] for r in self._conn.execute("PRAGMA table_info(source_health)")
+        }
+        for col, ddl in (
+            ("consecutive_failures", "INTEGER NOT NULL DEFAULT 0"),
+            ("selector_misses", "INTEGER NOT NULL DEFAULT 0"),
+            ("selector_ok", "INTEGER"),  # nullable: None = deep check not run
+        ):
+            if col not in health_cols:
+                self._conn.execute(
+                    f"ALTER TABLE source_health ADD COLUMN {col} {ddl}"
+                )
 
     # --- shared market data ------------------------------------------------ #
     def put_edge(self, edge: dict[str, Any]) -> None:
@@ -215,12 +246,25 @@ class SQLiteRepository:
             ).fetchone()
         if row is None:
             return None
+        return self._health_row(row)
+
+    @staticmethod
+    def _health_row(row) -> dict[str, Any]:
+        keys = row.keys()
+        sel = row["selector_ok"] if "selector_ok" in keys else None
         return {
             "source_name": row["source_name"],
             "url": row["url"],
             "last_status": row["last_status"],
             "last_404": bool(row["last_404"]),
             "checked_at": row["checked_at"],
+            "consecutive_failures": (
+                row["consecutive_failures"] if "consecutive_failures" in keys else 0
+            ),
+            "selector_misses": (
+                row["selector_misses"] if "selector_misses" in keys else 0
+            ),
+            "selector_ok": (None if sel is None else bool(sel)),
         }
 
     def put_source_health(
@@ -231,21 +275,32 @@ class SQLiteRepository:
         last_status: Optional[int],
         last_404: bool,
         checked_at: Optional[str] = None,
+        consecutive_failures: int = 0,
+        selector_misses: int = 0,
+        selector_ok: Optional[bool] = None,
     ) -> None:
+        sel = None if selector_ok is None else (1 if selector_ok else 0)
         with self._lock:
             self._conn.execute(
                 "INSERT INTO source_health "
-                "(source_name, url, last_status, last_404, checked_at) "
-                "VALUES (?, ?, ?, ?, ?) "
+                "(source_name, url, last_status, last_404, checked_at, "
+                " consecutive_failures, selector_misses, selector_ok) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(source_name) DO UPDATE SET "
                 "url=excluded.url, last_status=excluded.last_status, "
-                "last_404=excluded.last_404, checked_at=excluded.checked_at",
+                "last_404=excluded.last_404, checked_at=excluded.checked_at, "
+                "consecutive_failures=excluded.consecutive_failures, "
+                "selector_misses=excluded.selector_misses, "
+                "selector_ok=excluded.selector_ok",
                 (
                     source_name,
                     url,
                     last_status,
                     1 if last_404 else 0,
                     checked_at or _now(),
+                    int(consecutive_failures),
+                    int(selector_misses),
+                    sel,
                 ),
             )
             self._conn.commit()
@@ -255,16 +310,46 @@ class SQLiteRepository:
             rows = self._conn.execute(
                 "SELECT * FROM source_health ORDER BY source_name"
             ).fetchall()
-        return [
-            {
-                "source_name": r["source_name"],
-                "url": r["url"],
-                "last_status": r["last_status"],
-                "last_404": bool(r["last_404"]),
-                "checked_at": r["checked_at"],
-            }
-            for r in rows
-        ]
+        return [self._health_row(r) for r in rows]
+
+    # --- program staleness (Phase 8b devaluation fast-path §6.2/§D) -------- #
+    def mark_program_stale(
+        self, program: str, *, reason: Optional[str] = None, at: Optional[str] = None
+    ) -> None:
+        """Record that a program's charts are stale NOW (devaluation fast-path).
+
+        The aggregator consults this on emit and caps the affected quotes'
+        `source_updated_at` before the freshness cutoff, so `verify/crosscheck`
+        demotes them — without any `domain/`/`verify/` change.
+        """
+        program = str(program).strip().lower()
+        if not program:
+            return
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO program_staleness (program, marked_stale_at, reason) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(program) DO UPDATE SET "
+                "marked_stale_at=excluded.marked_stale_at, reason=excluded.reason",
+                (program, at or _now(), reason),
+            )
+            self._conn.commit()
+
+    def stale_programs(self) -> dict[str, str]:
+        """Map of program -> marked_stale_at ISO timestamp."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT program, marked_stale_at FROM program_staleness"
+            ).fetchall()
+        return {r["program"]: r["marked_stale_at"] for r in rows}
+
+    def clear_program_stale(self, program: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM program_staleness WHERE program = ?",
+                (str(program).strip().lower(),),
+            )
+            self._conn.commit()
 
     def close(self) -> None:
         with self._lock:

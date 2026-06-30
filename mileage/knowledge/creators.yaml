@@ -77,14 +77,14 @@ creators:
     blog_rss: https://letsgettothepoints.com/feed/    # verify
     youtube:
       handle: "@LetsGetToThePoints"
-      channel_id: TODO   # resolve once from the handle; do NOT guess
+      channel_id: UCaE0KM4BEXBR1969_Urs6mw   # resolved from youtube.com/@LetsGetToThePoints
     trust: 0.45
 
   - name: award_travel_101
     blog_rss: null
     youtube:
       handle: "@awardtravel101"
-      channel_id: TODO   # only /c/awardtravel101 vanity URL found; resolve once
+      channel_id: UCOBfnZ9yioR331pId7FyrNA   # resolved from youtube.com/@awardtravel101
     trust: 0.45
 
   - name: max_miles_points

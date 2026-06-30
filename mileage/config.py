@@ -81,6 +81,18 @@ class Config:
     # (.env), never hardcoded. App-Password IMAP only — no OAuth, no Gmail API.
     gmail_address: Optional[str] = None
     gmail_app_password: Optional[str] = None
+    # --- Phase 8b: URL rediscovery (§F) ----------------------------------- #
+    # Deterministic scraping of known-good URLs is the default + cheap path. An
+    # LLM/web search runs ONLY when a source rots, behind this flag AND a search
+    # key (no key -> no-op). It only proposes URLs; extraction stays
+    # deterministic + grounded. Rot thresholds: a source is rotted when it 404s,
+    # OR fails N times in a row, OR returns M consecutive selector-misses.
+    url_rediscovery_enabled: bool = False
+    bing_search_api_key: Optional[str] = None
+    serpapi_api_key: Optional[str] = None
+    rot_max_failures: int = 3
+    rot_max_selector_misses: int = 2
+    rediscovery_min_rotted: int = 1
 
     @property
     def sources_path(self) -> Path:
@@ -110,6 +122,15 @@ class Config:
             offline=os.getenv("MILEAGE_OFFLINE", "") not in ("", "0", "false"),
             gmail_address=os.getenv("GMAIL_ADDRESS") or None,
             gmail_app_password=os.getenv("GMAIL_APP_PASSWORD") or None,
+            url_rediscovery_enabled=os.getenv("MILEAGE_URL_REDISCOVERY", "")
+            not in ("", "0", "false"),
+            bing_search_api_key=os.getenv("BING_SEARCH_API_KEY") or None,
+            serpapi_api_key=os.getenv("SERPAPI_API_KEY") or None,
+            rot_max_failures=int(os.getenv("MILEAGE_ROT_MAX_FAILURES", "3")),
+            rot_max_selector_misses=int(
+                os.getenv("MILEAGE_ROT_MAX_SELECTOR_MISSES", "2")
+            ),
+            rediscovery_min_rotted=int(os.getenv("MILEAGE_REDISCOVERY_MIN_ROTTED", "1")),
         )
 
 

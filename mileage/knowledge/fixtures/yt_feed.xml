@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  FIXTURE — stands in for a YouTube channel RSS feed
+  (https://www.youtube.com/feeds/videos.xml?channel_id=UC...). The transcript
+  intake reads the videoId from each <entry>, then pulls captions (mocked in
+  tests via an injected caption_fetcher) and extracts grounded rows.
+-->
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015"
+      xmlns="http://www.w3.org/2005/Atom">
+  <title>Luke's Points and Miles</title>
+  <entry>
+    <id>yt:video:VID12345678</id>
+    <yt:videoId>VID12345678</yt:videoId>
+    <title>The best transcon and transatlantic award sweet spots right now</title>
+    <published>2026-06-28T17:00:00+00:00</published>
+  </entry>
+</feed>

@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional
 
 from ..parse import RawChartRow
+from .devaluation import detect_devaluation
 
 if TYPE_CHECKING:  # avoid a runtime import cycle with the package __init__
     from ...config import Config
@@ -32,16 +33,6 @@ log = logging.getLogger("mileage.aggregator.ingest.email")
 
 IMAP_HOST = "imap.gmail.com"
 IMAP_PORT = 993
-
-# Programs a "<program> devaluation" / "award chart change" subject can flag.
-_DEVALUATION_PROGRAMS = {
-    "turkish": ["turkish", "miles&smiles", "miles and smiles"],
-    "aeroplan": ["aeroplan", "air canada"],
-    "lifemiles": ["lifemiles", "avianca"],
-    "ana": ["ana"],
-    "krisflyer": ["krisflyer", "singapore"],
-}
-_DEVALUATION_TRIGGERS = ("devaluation", "award chart change", "chart change", "devalues")
 
 
 @dataclass
@@ -120,20 +111,6 @@ def _to_document(msg: Message) -> EmailDocument:
         body=message_body(msg),
         received_at=received_iso,
     )
-
-
-# --------------------------------------------------------------------------- #
-# Devaluation fast-path
-# --------------------------------------------------------------------------- #
-def detect_devaluation(subject: str) -> Optional[str]:
-    """Return the program a devaluation subject flags stale, or None."""
-    low = (subject or "").lower()
-    if not any(trigger in low for trigger in _DEVALUATION_TRIGGERS):
-        return None
-    for program, aliases in _DEVALUATION_PROGRAMS.items():
-        if any(alias in low for alias in aliases):
-            return program
-    return None
 
 
 # --------------------------------------------------------------------------- #

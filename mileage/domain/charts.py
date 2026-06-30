@@ -31,20 +31,44 @@ def _bands_match(band_regions: list[str], a: str, b: str) -> bool:
     return sorted(x.lower() for x in band_regions) == sorted([a, b])
 
 
+def great_circle_miles(
+    a: tuple[float, float], b: tuple[float, float]
+) -> float:
+    """Great-circle distance in statute miles between two [lat, lon] points."""
+    lat1, lon1 = math.radians(a[0]), math.radians(a[1])
+    lat2, lon2 = math.radians(b[0]), math.radians(b[1])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    h = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    )
+    return 2 * 3958.7613 * math.asin(min(1.0, math.sqrt(h)))
+
+
 def lookup_award_miles(
     program: str,
     program_chart: dict,
     route: Route,
     region_map: dict[str, str],
+    *,
+    airport_coords: Optional[dict[str, tuple[float, float]]] = None,
 ) -> Optional[ChartHit]:
     """Resolve `route` against one program's chart. None if unresolvable.
 
-    `program_chart` shape (from charts.yaml):
+    `program_chart` shape (from charts.yaml / parsed rows):
         {
           "bands": [
             {"regions": ["north_america", "europe"],
              "roundtrip": false,
              "miles": {"economy": 30000, "business": 45000}},
+            # distance-banded (Aeroplan): the band also carries a [lo, hi] mile
+            # range; it matches only when the route's great-circle distance falls
+            # inside it (§A.4). Needs `airport_coords`.
+            {"regions": ["north_america", "europe"],
+             "roundtrip": false,
+             "distance": [4001, 6000],
+             "miles": {"business": 70000}},
             ...
           ]
         }
@@ -55,15 +79,34 @@ def lookup_award_miles(
         return None
 
     cabin_key = route.cabin.value
+    gcm: Optional[float] = None
     for band in program_chart.get("bands", []):
         regions = band.get("regions", [])
         if len(regions) != 2 or not _bands_match(regions, r_o, r_d):
             continue
+        # Distance-banded charts: the geography matched, but the band only
+        # applies to a great-circle range. Compute the route distance once and
+        # skip bands whose [lo, hi] the route falls outside.
+        dist = band.get("distance")
+        if dist:
+            if airport_coords is None:
+                continue
+            co = airport_coords.get(route.origin.upper())
+            cd = airport_coords.get(route.dest.upper())
+            if not (co and cd):
+                continue
+            if gcm is None:
+                gcm = great_circle_miles(co, cd)
+            lo, hi = float(dist[0]), float(dist[1])
+            if not (lo <= gcm <= hi):
+                continue
         miles_map = band.get("miles", {})
         raw = miles_map.get(cabin_key)
         if raw is None:
-            # Band matches the geography but not this cabin: no usable datum.
-            return None
+            # Geography (and distance) matched but not this cabin: keep scanning;
+            # another band for the same pair may carry it (distance charts split
+            # one zone pair across many cabin/distance rows).
+            continue
         flags: list[str] = []
         miles = int(raw)
         if band.get("roundtrip", False):

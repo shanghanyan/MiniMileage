@@ -19,7 +19,7 @@ sees curated + scraped as genuinely independent sources).
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -46,6 +46,11 @@ from .sources import Target, apply_persisted_health, load_targets, validate_targ
 log = logging.getLogger("mileage.aggregator")
 
 _KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent.parent / "knowledge"
+
+# A devaluation-flagged chart has its source_updated_at capped this far back so
+# verify/freshness independently demotes it. Must exceed freshness'
+# DEFAULT_STALE_AFTER_DAYS (120) without importing verify into providers.
+_STALE_CAP_DAYS = 200
 
 
 def _parse_date(value: Optional[str]) -> Optional[datetime]:
@@ -86,6 +91,7 @@ class AggregatorProvider:
         self.enabled = enabled
         self._health_repo = health_repo
         self._region_map = self._load_region_map()
+        self._airport_coords = self._load_airport_coords()
         self.targets: list[Target] = load_targets(self._sources_path)
         if health_repo is not None:
             apply_persisted_health(self.targets, health_repo)
@@ -132,16 +138,44 @@ class AggregatorProvider:
         *,
         force: bool = False,
         max_age_days: int = 30,
+        deep: bool = False,
     ) -> list[Target]:
-        """Run the URL-rot health check; persist results to SQLite."""
+        """Run the URL-rot health check; persist results to SQLite.
+
+        `deep=True` (§G) additionally fetches each reachable target's body and
+        runs its structural parser, requiring >=1 canonicalizable row — a
+        200-but-empty page is reported `selector_miss`, not `ok`.
+        """
         self.targets = validate_targets(
             self.targets,
             self.fetcher,
             health_repo=self._health_repo,
             force=force,
             max_age_days=max_age_days,
+            deep=deep,
+            content_check=self._content_rows if deep else None,
         )
         return self.targets
+
+    def _content_rows(self, target: Target, text: str) -> int:
+        """Count canonicalizable rows a target's parser produces (§G deep check)."""
+        if target.provides == "chart":
+            return len(self._parse_chart_rows(target, text))
+        if target.provides == "award":
+            return len(self._parse_award_rows(target, text))
+        return 0
+
+    def rotted_targets(
+        self, *, max_failures: int = 3, max_selector_misses: int = 2
+    ) -> list[Target]:
+        """Targets that crossed the rot threshold (§F trigger)."""
+        return [
+            t
+            for t in self.targets
+            if t.is_rotted(
+                max_failures=max_failures, max_selector_misses=max_selector_misses
+            )
+        ]
 
     # --- helpers ----------------------------------------------------------- #
     def _load_region_map(self) -> dict[str, str]:
@@ -151,8 +185,47 @@ class AggregatorProvider:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         return {k.upper(): v for k, v in (data.get("region_map") or {}).items()}
 
+    def _load_airport_coords(self) -> dict[str, tuple[float, float]]:
+        """Airport [lat, lon] for the distance-band resolver (§A.4)."""
+        path = self._dir / "charts.yaml"
+        if not path.exists():
+            return {}
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        coords: dict[str, tuple[float, float]] = {}
+        for k, v in (data.get("airports") or {}).items():
+            try:
+                coords[k.upper()] = (float(v[0]), float(v[1]))
+            except (TypeError, ValueError, IndexError):
+                continue
+        return coords
+
     def _targets_for(self, provides: str) -> list[Target]:
         return [t for t in self.targets if t.provides == provides and t.healthy()]
+
+    def _stale_programs(self) -> set[str]:
+        """Programs flagged stale, from the store (devaluation fast-path, §D)
+        and the discovered_charts.json fallback. Union of both."""
+        stale = set(load_stale_programs(self._discovered_path))
+        repo = self._health_repo
+        if repo is not None and hasattr(repo, "stale_programs"):
+            try:
+                stale.update(repo.stale_programs().keys())
+            except Exception as exc:  # store hiccup must not break a quote
+                log.info("could not read program staleness: %s", exc)
+        return stale
+
+    @staticmethod
+    def _cap_stale(prov: Provenance) -> Provenance:
+        """Return a copy of `prov` with source_updated_at capped before the
+        freshness cutoff so verify/crosscheck demotes it (no domain/verify
+        change needed, §D). Provenance is frozen, so we replace rather than
+        mutate."""
+        from dataclasses import replace
+
+        cap = datetime.now(timezone.utc) - timedelta(days=_STALE_CAP_DAYS)
+        if prov.source_updated_at is None or prov.source_updated_at > cap:
+            return replace(prov, source_updated_at=cap)
+        return prov
 
     def _read(self, target: Target):
         result = self.fetcher.get(target.url)
@@ -175,7 +248,7 @@ class AggregatorProvider:
         self, route: Route, wanted: Optional[set]
     ) -> list[AwardQuote]:
         out: list[AwardQuote] = []
-        stale = load_stale_programs(self._discovered_path)
+        stale = self._stale_programs()
         for target in self._targets_for("chart"):
             result = self._read(target)
             if result is None:
@@ -185,15 +258,19 @@ class AggregatorProvider:
             for program, chart in chart_by_program.items():
                 if wanted and program not in wanted:
                     continue
-                hit = lookup_award_miles(program, chart, route, self._region_map)
+                hit = lookup_award_miles(
+                    program, chart, route, self._region_map,
+                    airport_coords=self._airport_coords,
+                )
                 if hit is None:
                     continue
                 prov = self._provenance(
                     target, result, chart.get("_updated_at")
                 )
                 flags = ["no_live_space", *hit.flags]
-                if program in stale:  # devaluation fast-path (§6.2)
+                if program in stale:  # devaluation fast-path (§6.2/§D)
                     flags.append("stale")
+                    prov = self._cap_stale(prov)
                 if "from_wayback" in result.flags:
                     flags.append("from_wayback")
                 out.append(
@@ -223,7 +300,7 @@ class AggregatorProvider:
         rows = load_discovered_rows(self._discovered_path)
         if not rows:
             return []
-        stale = load_stale_programs(self._discovered_path)
+        stale = self._stale_programs()
         out: list[AwardQuote] = []
         # Group by (program, source) so each independent source cross-checks and
         # carries its own provenance — two intakes echoing one post are NOT
@@ -244,7 +321,10 @@ class AggregatorProvider:
             chart = self._build_charts(prog_rows).get(program)
             if chart is None:
                 continue
-            hit = lookup_award_miles(program, chart, route, self._region_map)
+            hit = lookup_award_miles(
+                program, chart, route, self._region_map,
+                airport_coords=self._airport_coords,
+            )
             if hit is None:
                 continue
             m = meta[(program, source_name)]
@@ -259,6 +339,7 @@ class AggregatorProvider:
             flags = ["no_live_space", "llm_extracted", *hit.flags]
             if program in stale:
                 flags.append("stale")
+                prov = self._cap_stale(prov)
             out.append(
                 AwardQuote(
                     program=program,
@@ -290,13 +371,14 @@ class AggregatorProvider:
         charts: dict[str, dict] = {}
         for r in rows:
             spec = charts.setdefault(r.program, {"bands": [], "_updated_at": None})
-            spec["bands"].append(
-                {
-                    "regions": [r.region_a, r.region_b],
-                    "roundtrip": r.roundtrip,
-                    "miles": {r.cabin: r.miles},
-                }
-            )
+            band: dict = {
+                "regions": [r.region_a, r.region_b],
+                "roundtrip": r.roundtrip,
+                "miles": {r.cabin: r.miles},
+            }
+            if r.distance_min is not None and r.distance_max is not None:
+                band["distance"] = [r.distance_min, r.distance_max]
+            spec["bands"].append(band)
             if r.updated_at and not spec["_updated_at"]:
                 spec["_updated_at"] = r.updated_at
         return charts

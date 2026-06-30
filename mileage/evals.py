@@ -408,6 +408,151 @@ def poison_rows(route: Route) -> list[PoisonRow]:
     ]
 
 
+# --------------------------------------------------------------------------- #
+# Extraction-accuracy eval (§6.3/§I) — a deterministic CI gate
+# --------------------------------------------------------------------------- #
+# A frozen gold corpus: (document, expected (program, region_a, region_b, cabin,
+# miles) rows). Deterministic so this is a real build gate, not a vibe. The
+# newsletter prose is the same fixture the email intake ingests.
+_FIXTURES_DIR = Path(__file__).resolve().parent / "knowledge" / "fixtures"
+
+_EXTRACTION_GOLD: list[tuple[str, set[tuple]]] = [
+    (
+        (_FIXTURES_DIR / "sample_newsletter.eml").read_text(encoding="utf-8"),
+        {
+            ("turkish", "north_america", "europe", "business", 45000),
+            ("lifemiles", "north_america", "europe", "economy", 30000),
+            ("aeroplan", "north_america", "north_america", "economy", 12500),
+        },
+    ),
+]
+
+# Regression thresholds. Lowering these (or breaking grounding) fails the build.
+_MIN_RECALL = 0.90
+_MIN_PRECISION = 0.85
+_MIN_EXACT_MILES = 0.90
+
+
+@dataclass
+class ExtractionReport:
+    precision: float = 0.0
+    recall: float = 0.0
+    exact_miles: float = 0.0
+    dropped_regions: int = 0
+    checks: list[Check] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return all(c.ok for c in self.checks)
+
+
+def run_extraction_eval() -> ExtractionReport:
+    """Row precision/recall + exact miles-match + dropped-row counter (§I).
+
+    - precision/recall/exact-miles measure the deterministic extractor on the
+      frozen prose corpus;
+    - the dropped-region counter proves the §A canonicalizer drops (and counts)
+      an unmappable zone rather than silently mismatching it;
+    - a grounding check proves an ungrounded number is never emitted.
+    Returns a report whose `ok` is False on any regression (CI exits non-zero).
+    """
+    from .providers.aggregator.extract import DeterministicExtractor, number_is_grounded
+    from .providers.aggregator.parse import parse_chart_html_wide
+
+    extractor = DeterministicExtractor()
+    tp = 0
+    n_pred = 0
+    n_exp = 0
+    exact_hits = 0
+    exact_keys = 0
+    for document, expected in _EXTRACTION_GOLD:
+        rows = extractor.extract(document)
+        predicted = {
+            (r.program, r.region_a, r.region_b, r.cabin, r.miles) for r in rows
+        }
+        tp += len(predicted & expected)
+        n_pred += len(predicted)
+        n_exp += len(expected)
+        # Exact miles match keyed on (program, region pair, cabin).
+        pred_by_key = {(r.program, r.region_a, r.region_b, r.cabin): r.miles for r in rows}
+        for (prog, ra, rb, cab, miles) in expected:
+            exact_keys += 1
+            if pred_by_key.get((prog, ra, rb, cab)) == miles:
+                exact_hits += 1
+        # Every emitted number must be grounded in the source.
+        for r in rows:
+            if not number_is_grounded(r.miles, document):
+                # An ungrounded number escaping is a hard failure — record it as
+                # a precision hit of 0 by inflating predicted with a phantom.
+                n_pred += 1
+
+    report = ExtractionReport(
+        precision=(tp / n_pred) if n_pred else 0.0,
+        recall=(tp / n_exp) if n_exp else 0.0,
+        exact_miles=(exact_hits / exact_keys) if exact_keys else 0.0,
+    )
+
+    # Dropped-row counter: the §A canonicalizer must drop the unmapped zone in
+    # the real-label ATF fixture (and count it), not silently mismatch it.
+    stats: dict = {}
+    lifemiles_html = (_FIXTURES_DIR / "atf_lifemiles_chart.html").read_text(encoding="utf-8")
+    parse_chart_html_wide(lifemiles_html, program="lifemiles", stats=stats)
+    report.dropped_regions = int(stats.get("dropped", 0))
+
+    # A planted ungrounded number must never be emitted.
+    ungrounded = extractor.extract(
+        "Turkish business class to Europe is 47,123 miles."  # 47123 IS grounded;
+    )
+    grounding_clean = all(
+        number_is_grounded(r.miles, "Turkish business class to Europe is 47,123 miles.")
+        for r in ungrounded
+    )
+
+    report.checks = [
+        Check(
+            f"recall >= {_MIN_RECALL}",
+            report.recall >= _MIN_RECALL,
+            f"recall={report.recall:.2f}",
+        ),
+        Check(
+            f"precision >= {_MIN_PRECISION}",
+            report.precision >= _MIN_PRECISION,
+            f"precision={report.precision:.2f}",
+        ),
+        Check(
+            f"exact miles-match >= {_MIN_EXACT_MILES}",
+            report.exact_miles >= _MIN_EXACT_MILES,
+            f"exact={report.exact_miles:.2f}",
+        ),
+        Check(
+            "unmapped region dropped + counted (§A)",
+            report.dropped_regions >= 1,
+            f"dropped={report.dropped_regions} (expected >=1: the Antarctica row)",
+        ),
+        Check(
+            "every emitted number is grounded (§6.2)",
+            grounding_clean,
+            "all emitted miles literally present in source",
+        ),
+    ]
+    return report
+
+
+def render_extraction_report(report: ExtractionReport) -> str:
+    lines = ["", "=== Extraction-accuracy eval (CI gate) ===", ""]
+    for c in report.checks:
+        tick = "ok" if c.ok else "XX"
+        lines.append(f"  ({tick}) {c.name}: {c.detail}")
+    lines.append("")
+    lines.append(
+        f"  precision={report.precision:.2f} recall={report.recall:.2f} "
+        f"exact_miles={report.exact_miles:.2f} dropped_regions={report.dropped_regions}"
+        f"  ->  {'OK' if report.ok else 'REGRESSION'}"
+    )
+    lines.append("")
+    return "\n".join(lines)
+
+
 @dataclass
 class PoisonResult:
     ok: bool

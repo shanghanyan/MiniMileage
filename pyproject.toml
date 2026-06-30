@@ -27,6 +27,25 @@ aggregator = [
     "pdfplumber>=0.11",
 ]
 
+# Discovery intake (§6.1, aggregator mode b): blog + transcript readers. All
+# optional — without them, blog bodies fall back to a stdlib HTML stripper and
+# transcripts to yt-dlp/skip, so discovery still runs (email path needs none of
+# these — it's stdlib imaplib + the keyless deterministic extractor).
+discovery = [
+    "feedparser>=6.0",
+    "trafilatura>=1.6",
+    "readability-lxml>=0.8",
+    "youtube-transcript-api>=0.6",
+    "yt-dlp>=2024.0",
+]
+
+# Dev / test tooling. The suite also runs as standalone scripts
+# (`python3 tests/test_phaseN.py`), but pytest collects the same `test_*`
+# functions: `pip install -e ".[dev]" && pytest`.
+dev = [
+    "pytest>=8.0",
+]
+
 # Phase 4 multi-user backend. Without it, MILEAGE_REDIS_URL gracefully falls
 # back to the in-process stores, so single-user/local runs need nothing extra.
 multiuser = [
@@ -43,6 +62,11 @@ observability = [
 [project.scripts]
 mileage = "mileage.cli:main"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+# tests/conftest.py pins MILEAGE_OFFLINE=1 so the suite stays hermetic.
+
 [tool.setuptools]
 packages = [
     "mileage",
@@ -50,6 +74,8 @@ packages = [
     "mileage.domain",
     "mileage.providers",
     "mileage.providers.aggregator",
+    "mileage.providers.aggregator.ingest",
+    "mileage.providers.aggregator.extract",
     "mileage.providers.brain",
     "mileage.verify",
     "mileage.graph",

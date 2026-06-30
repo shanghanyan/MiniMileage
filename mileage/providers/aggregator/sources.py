@@ -13,7 +13,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import yaml
 
@@ -37,9 +37,37 @@ class Target:
     last_status: Optional[int] = None
     last_404: bool = False
     last_checked: Optional[str] = None
+    # Rot-detection (§F/§G). `selector_ok` is the deep content check: True = the
+    # structural parser produced >=1 canonicalizable row; False = 200-but-empty
+    # (selector_miss); None = not deep-checked.
+    selector_ok: Optional[bool] = None
+    consecutive_failures: int = 0
+    selector_misses: int = 0
 
     def healthy(self) -> bool:
+        # A hard 404 disables a source; a transient status 0 / selector_miss does
+        # NOT (it may recover) — but is surfaced distinctly by status_label().
         return not self.last_404
+
+    def status_label(self) -> str:
+        """Distinguish ok / unreachable / rotted / selector_miss (§G)."""
+        if self.last_checked is None:
+            return "unchecked"
+        if self.last_404:
+            return "rotted"
+        if self.last_status == 0:
+            return "unreachable"
+        if self.selector_ok is False:
+            return "selector_miss"
+        return "ok"
+
+    def is_rotted(self, *, max_failures: int = 3, max_selector_misses: int = 2) -> bool:
+        """True when this source should trigger URL rediscovery (§F)."""
+        return (
+            self.last_404
+            or self.consecutive_failures >= max_failures
+            or self.selector_misses >= max_selector_misses
+        )
 
 
 def _resolve_url(url: str, base_dir: Path) -> str:
@@ -93,6 +121,9 @@ def apply_persisted_health(
             t.last_status = row.get("last_status")
             t.last_404 = bool(row.get("last_404"))
             t.last_checked = row.get("checked_at")
+            t.consecutive_failures = int(row.get("consecutive_failures") or 0)
+            t.selector_misses = int(row.get("selector_misses") or 0)
+            t.selector_ok = row.get("selector_ok")
     return targets
 
 
@@ -115,8 +146,17 @@ def validate_targets(
     health_repo: Any = None,
     force: bool = False,
     max_age_days: int = 30,
+    deep: bool = False,
+    content_check: Optional[Callable[[Target, str], int]] = None,
 ) -> list[Target]:
-    """Probe each target; persist health (monthly URL-rot check, Phase 2)."""
+    """Probe each target; persist health (monthly URL-rot check, Phase 2/§G).
+
+    `deep=True` adds CONTENT validation: after a 200, fetch the body and run the
+    target's structural parser via `content_check(target, text) -> row_count`.
+    Zero rows on a live page is a `selector_miss` (the page loaded but stopped
+    serving the expected table) — surfaced distinctly and fed into §F rot
+    detection, instead of the old behavior that reported it as `ok`.
+    """
     now = datetime.now(timezone.utc).isoformat()
     for t in targets:
         if health_repo and not force and not _needs_check(t.last_checked, max_age_days):
@@ -129,7 +169,39 @@ def validate_targets(
         # must NOT disable the source forever; it stays usable and is re-probed.
         t.last_404 = status in (404, 410)
         t.last_checked = now
-        log.info("validate %s -> status=%s ok=%s", t.name, status, ok)
+
+        # Failure for the consecutive-failure counter = couldn't reach a healthy
+        # page (404/410/unreachable). A 200 resets it.
+        reachable = ok and status != 0 and not t.last_404
+        if reachable:
+            t.consecutive_failures = 0
+        else:
+            t.consecutive_failures += 1
+
+        # Deep content check (only meaningful on a reachable page).
+        t.selector_ok = None
+        if deep and reachable and content_check is not None:
+            result = fetcher.get(t.url)
+            if result is not None and result.ok:
+                try:
+                    rows = content_check(t, result.text)
+                except Exception as exc:  # a parser bug must not crash validation
+                    log.info("content_check error for %s: %s", t.name, exc)
+                    rows = 0
+                t.selector_ok = rows > 0
+                if rows > 0:
+                    t.selector_misses = 0
+                else:
+                    t.selector_misses += 1
+            else:
+                # Couldn't fetch the body to validate; leave selector_ok unknown.
+                t.selector_ok = None
+
+        log.info(
+            "validate %s -> status=%s label=%s fails=%d sel_miss=%d",
+            t.name, status, t.status_label(), t.consecutive_failures,
+            t.selector_misses,
+        )
         if health_repo is not None:
             health_repo.put_source_health(
                 t.name,
@@ -137,5 +209,8 @@ def validate_targets(
                 last_status=status,
                 last_404=t.last_404,
                 checked_at=now,
+                consecutive_failures=t.consecutive_failures,
+                selector_misses=t.selector_misses,
+                selector_ok=t.selector_ok,
             )
     return targets

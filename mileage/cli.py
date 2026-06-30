@@ -290,8 +290,17 @@ def run_sources(
     *,
     validate: bool = False,
     force: bool = False,
+    deep: bool = False,
+    rediscover: bool = False,
+    registry: Optional[ProviderRegistry] = None,
 ) -> int:
-    """List Engine A targets; optionally run the monthly URL-rot health check."""
+    """List Engine A targets; optionally run the URL-rot health check (§G).
+
+    `deep=True` runs content validation: after a 200, the target's parser must
+    produce >=1 canonicalizable row, so the display distinguishes
+    ok / unreachable (status 0) / rotted (404) / selector_miss instead of
+    collapsing the last three into `ok`.
+    """
     from .providers.aggregator import AggregatorProvider
 
     federation = load_federation(config)
@@ -301,20 +310,49 @@ def run_sources(
         enabled=config.aggregator_enabled,
         health_repo=repo,
     )
-    if validate:
+    if validate or deep:
         agg.validate_urls(
             force=force,
             max_age_days=federation.health_check_days,
+            deep=deep,
         )
+    if rediscover:
+        from .providers.aggregator.rediscover import run_rediscovery
+
+        cache = rl = jobs = None
+        if registry is not None and registry.stores is not None:
+            cache = registry.stores.cache
+            rl = registry.stores.rate_limiter
+            jobs = registry.stores.jobs
+
+        def _do_rediscovery():
+            report = run_rediscovery(agg, config, cache=cache, rate_limiter=rl)
+            if not report.ran:
+                print(f"  URL rediscovery: skipped — {report.reason}")
+            else:
+                print(f"  URL rediscovery: rotted={report.rotted} "
+                      f"adopted={[(a.source_name, a.new_url) for a in report.adoptions]} "
+                      f"rejected={len(report.rejected)}")
+
+        # Off the request path: run on the jobs queue when available.
+        if jobs is not None:
+            jobs.submit(_do_rediscovery, name="rediscovery")
+            jobs.join(timeout=120.0)
+        else:
+            _do_rediscovery()
     print(f"Engine A targets ({len(agg.targets)})  ·  provider health: "
           f"{agg.health().value}")
     print("-" * 68)
     for t in agg.targets:
         status = ""
         if t.last_checked:
-            mark = "ok" if t.healthy() else "DEAD"
+            label = t.status_label()
+            extra = ""
+            if deep and t.selector_ok is not None:
+                extra = " sel_miss" if t.selector_ok is False else " sel_ok"
             status = (
-                f"  [{mark} status={t.last_status} last_404={t.last_404} "
+                f"  [{label} status={t.last_status} "
+                f"fails={t.consecutive_failures}{extra} "
                 f"checked={t.last_checked[:10]}]"
             )
         print(
@@ -532,7 +570,9 @@ def run_eval(config: Config) -> int:
 
     report = evals.run_golden(base_config=config)
     print(evals.render_report(report))
-    return 0 if report.ok else 1
+    extraction = evals.run_extraction_eval()
+    print(evals.render_extraction_report(extraction))
+    return 0 if (report.ok and extraction.ok) else 1
 
 
 def run_demo_observability(config: Config) -> int:
@@ -603,40 +643,91 @@ def run_demo(registry: ProviderRegistry, repo: Repository, config: Config) -> in
 # --------------------------------------------------------------------------- #
 # Argparse
 # --------------------------------------------------------------------------- #
-def run_discover(config: Config, *, dry_run: bool = False) -> int:
+def run_discover(
+    config: Config,
+    repo: Optional[Repository] = None,
+    registry: Optional[ProviderRegistry] = None,
+    *,
+    dry_run: bool = False,
+    full: bool = False,
+) -> int:
     """Discovery intake (§6.1): mailbox -> local extractor -> grounded rows.
 
-    Connects to `occulosequor@gmail.com` over IMAP when GMAIL_ADDRESS +
-    GMAIL_APP_PASSWORD are set (and not offline); otherwise reads `.eml`
-    fixtures so the pipeline still runs. Extracted rows are number-grounded and
-    persisted to knowledge/discovered_charts.json, where the aggregator resolves
-    them for a route through the same verify/graph path — flagged
-    `llm_extracted`, so they can only ever produce `tentative_best`.
+    Default is the email feed only (fast, the proven path): connects to the
+    mailbox over IMAP when GMAIL_ADDRESS + GMAIL_APP_PASSWORD are set (and not
+    offline), reads UNSEEN mail with PEEK (idempotent), otherwise falls back to
+    the `.eml` fixtures so the pipeline still runs.
+
+    `--all` additionally sweeps creator blogs + transcripts (RSS +
+    `youtube-transcript-api`) off the `store/jobs.py` queue under a `discover`
+    span. That sweep is slower (dozens of feeds) and is opt-in so the everyday
+    `mileage discover` stays snappy.
+
+    Either way, extracted rows are number-grounded and persisted to
+    knowledge/discovered_charts.json, where the aggregator resolves them for a
+    route through the same verify/graph path — flagged `llm_extracted`, so they
+    can only ever produce `tentative_best`. Devaluation headlines mark the named
+    program `stale` in the store.
     """
     from .providers.aggregator.ingest import (
         discovered_path,
+        run_all_intakes,
         run_discovery,
         write_discovered,
     )
 
-    result = run_discovery(config)
-    source = "fixtures (.eml)" if result.used_fixtures else "live Gmail IMAP"
     addr = config.gmail_address or "occulosequor@gmail.com"
 
-    print()
-    print(f"Discovery intake — mailbox: {addr}  ·  source: {source}")
-    print("=" * 68)
-    print(f"  documents ingested : {len(result.documents)}")
-    print(f"  grounded rows      : {len(result.rows)}")
-    if result.stale_programs:
-        print(f"  devaluation -> stale: {', '.join(sorted(result.stale_programs))}")
+    if full:
+        cache = lock = jobs = None
+        if registry is not None and registry.stores is not None:
+            cache = registry.stores.cache
+            lock = registry.stores.lock
+            jobs = registry.stores.jobs
+        result = run_all_intakes(config, repo=repo, cache=cache, lock=lock, jobs=jobs)
+        source = "fixtures" if result.used_fixtures else "live (IMAP + RSS)"
+        rows = result.rows
+        stale_programs = result.stale_programs
+
+        print()
+        print(f"Discovery intake (--all) — mailbox: {addr}  ·  source: {source}")
+        print("=" * 68)
+        print(f"  emails ingested    : {result.email_docs}")
+        print(f"  new blog posts     : {result.blog_new}")
+        print(f"  new videos         : {result.transcript_new}")
+        print(f"  grounded rows      : {len(rows)}  {result.by_intake}")
+        if stale_programs:
+            print(f"  devaluation -> stale: {', '.join(sorted(stale_programs))}"
+                  f"  (store: {', '.join(sorted(result.marked_stale)) or 'none'})")
+    else:
+        # Email-only default — the original, proven `mileage discover` path.
+        email = run_discovery(config)
+        rows = email.rows
+        stale_programs = email.stale_programs
+        source = "fixtures (.eml)" if email.used_fixtures else "live Gmail IMAP"
+
+        # Devaluation fast-path still persists to the store (§D).
+        if repo is not None and stale_programs:
+            from .providers.aggregator.ingest import mark_devaluations_stale
+
+            mark_devaluations_stale(repo, stale_programs, reason="discovery")
+
+        print()
+        print(f"Discovery intake — mailbox: {addr}  ·  source: {source}")
+        print("=" * 68)
+        print(f"  emails ingested    : {len(email.documents)}")
+        print(f"  grounded rows      : {len(rows)}")
+        if stale_programs:
+            print(f"  devaluation -> stale: {', '.join(sorted(stale_programs))}")
+        print("  (tip: `mileage discover --all` also sweeps blogs + transcripts)")
+
     print("-" * 68)
-    for r in result.rows:
+    for r in rows:
         print(
             f"  {r['program']:<10} {r['region_a']} -> {r['region_b']:<14} "
             f"{r['cabin']:<16} {r['miles']:>7,} mi   [{r['source_name']}]"
         )
-    if not result.rows:
+    if not rows:
         print("  (no number-grounded chart rows found in the ingested documents)")
     print("-" * 68)
 
@@ -645,8 +736,8 @@ def run_discover(config: Config, *, dry_run: bool = False) -> int:
         return 0
 
     path = discovered_path(config.knowledge_dir)
-    write_discovered(path, result.rows, result.stale_programs)
-    print(f"  wrote {path.name} ({len(result.rows)} rows) — aggregator will use it.")
+    write_discovered(path, rows, stale_programs)
+    print(f"  wrote {path.name} ({len(rows)} rows) — aggregator will use it.")
     print()
     return 0
 
@@ -703,6 +794,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="show what was extracted but do not write discovered_charts.json",
     )
+    d.add_argument(
+        "--all",
+        dest="full",
+        action="store_true",
+        help="also sweep creator blogs + transcripts (slower; default is "
+        "email-only)",
+    )
 
     p = sub.add_parser("providers", help="provider federation status + quota")
     p.add_argument("--json", action="store_true")
@@ -717,6 +815,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="re-probe all targets even if checked within the monthly window",
+    )
+    s.add_argument(
+        "--deep",
+        action="store_true",
+        help="content-validate: after a 200, require the parser to hit >=1 row "
+        "(distinguishes ok / unreachable / rotted / selector_miss)",
+    )
+    s.add_argument(
+        "--rediscover",
+        action="store_true",
+        help="run URL rediscovery for rotted sources (gated by "
+        "MILEAGE_URL_REDISCOVERY + a search key; no-op otherwise)",
     )
     return parser
 
@@ -738,6 +848,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                 config, repo,
                 validate=args.validate_urls,
                 force=getattr(args, "force", False),
+                deep=getattr(args, "deep", False),
+                rediscover=getattr(args, "rediscover", False),
+                registry=registry,
             )
 
         if args.command == "providers":
@@ -760,7 +873,11 @@ def main(argv: Optional[list[str]] = None) -> int:
             return run_demo_observability(config)
 
         if args.command == "discover":
-            return run_discover(config, dry_run=getattr(args, "dry_run", False))
+            return run_discover(
+                config, repo, registry,
+                dry_run=getattr(args, "dry_run", False),
+                full=getattr(args, "full", False),
+            )
 
         if args.command == "demo":
             return run_demo(registry, repo, config)

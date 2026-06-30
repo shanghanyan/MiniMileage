@@ -5,20 +5,187 @@
 # All chart-derived quotes are flagged `no_live_space` by the curated provider:
 # they prove a seat *can* cost this many miles, not that one is bookable today.
 
+# Airport -> canonical region token. Expanded beyond the Phase 0 twelve to a
+# realistic award-relevant set across NA / Europe / North Asia / SE Asia / South
+# Asia / Middle East / Oceania / South America / Africa. These are factual IATA
+# classifications (no invented geography); used by lookup to map a route's
+# airports to the canonical region pair a chart band is keyed on.
 region_map:
+  # North America
   LAX: north_america
   JFK: north_america
   SFO: north_america
   ORD: north_america
   EWR: north_america
   IAD: north_america
+  SEA: north_america
+  BOS: north_america
+  ATL: north_america
+  DFW: north_america
+  DEN: north_america
+  MIA: north_america
+  IAH: north_america
+  PHX: north_america
+  LAS: north_america
+  MCO: north_america
+  YYZ: north_america
+  YVR: north_america
+  YUL: north_america
+  # Europe
   IST: europe
   LHR: europe
   CDG: europe
   FRA: europe
+  AMS: europe
+  MAD: europe
+  BCN: europe
+  FCO: europe
+  MUC: europe
+  ZRH: europe
+  VIE: europe
+  CPH: europe
+  ARN: europe
+  DUB: europe
+  LIS: europe
+  ATH: europe
+  BRU: europe
+  # North Asia
   NRT: north_asia
   HND: north_asia
   ICN: north_asia
+  PEK: north_asia
+  PVG: north_asia
+  HKG: north_asia
+  TPE: north_asia
+  KIX: north_asia
+  GMP: north_asia
+  CAN: north_asia
+  # Southeast Asia
+  SIN: southeast_asia
+  BKK: southeast_asia
+  KUL: southeast_asia
+  CGK: southeast_asia
+  MNL: southeast_asia
+  HAN: southeast_asia
+  SGN: southeast_asia
+  DPS: southeast_asia
+  # South Asia
+  DEL: south_asia
+  BOM: south_asia
+  MAA: south_asia
+  BLR: south_asia
+  # Middle East
+  DXB: middle_east
+  DOH: middle_east
+  AUH: middle_east
+  TLV: middle_east
+  JED: middle_east
+  RUH: middle_east
+  # Oceania
+  SYD: oceania
+  MEL: oceania
+  AKL: oceania
+  BNE: oceania
+  PER: oceania
+  # South America
+  GRU: south_america
+  EZE: south_america
+  SCL: south_america
+  BOG: south_america
+  LIM: south_america
+  # Africa
+  JNB: africa
+  CPT: africa
+  CAI: africa
+  NBO: africa
+  LOS: africa
+  ADD: africa
+
+# Airport coordinates [latitude, longitude] for the great-circle distance-band
+# resolver (§A.4 — Aeroplan-style distance charts). Sourced from public airport
+# coordinates; rounded — distance bands are thousands of miles wide, so degree-
+# level precision is ample. Only airports listed in region_map need coords.
+airports:
+  LAX: [33.94, -118.41]
+  JFK: [40.64, -73.78]
+  SFO: [37.62, -122.38]
+  ORD: [41.98, -87.90]
+  EWR: [40.69, -74.17]
+  IAD: [38.95, -77.46]
+  SEA: [47.45, -122.31]
+  BOS: [42.36, -71.01]
+  ATL: [33.64, -84.43]
+  DFW: [32.90, -97.04]
+  DEN: [39.86, -104.67]
+  MIA: [25.79, -80.29]
+  IAH: [29.98, -95.34]
+  PHX: [33.43, -112.01]
+  LAS: [36.08, -115.15]
+  MCO: [28.43, -81.31]
+  YYZ: [43.68, -79.63]
+  YVR: [49.19, -123.18]
+  YUL: [45.47, -73.74]
+  IST: [41.26, 28.74]
+  LHR: [51.47, -0.45]
+  CDG: [49.01, 2.55]
+  FRA: [50.03, 8.56]
+  AMS: [52.31, 4.76]
+  MAD: [40.47, -3.56]
+  BCN: [41.30, 2.08]
+  FCO: [41.80, 12.25]
+  MUC: [48.35, 11.79]
+  ZRH: [47.46, 8.55]
+  VIE: [48.11, 16.57]
+  CPH: [55.62, 12.65]
+  ARN: [59.65, 17.92]
+  DUB: [53.42, -6.27]
+  LIS: [38.77, -9.13]
+  ATH: [37.94, 23.95]
+  BRU: [50.90, 4.48]
+  NRT: [35.76, 140.39]
+  HND: [35.55, 139.78]
+  ICN: [37.46, 126.44]
+  PEK: [40.08, 116.58]
+  PVG: [31.14, 121.81]
+  HKG: [22.31, 113.91]
+  TPE: [25.08, 121.23]
+  KIX: [34.43, 135.24]
+  GMP: [37.56, 126.79]
+  CAN: [23.39, 113.30]
+  SIN: [1.36, 103.99]
+  BKK: [13.69, 100.75]
+  KUL: [2.74, 101.71]
+  CGK: [-6.13, 106.66]
+  MNL: [14.51, 121.02]
+  HAN: [21.22, 105.81]
+  SGN: [10.82, 106.66]
+  DPS: [-8.75, 115.17]
+  DEL: [28.56, 77.10]
+  BOM: [19.09, 72.87]
+  MAA: [12.99, 80.17]
+  BLR: [13.20, 77.71]
+  DXB: [25.25, 55.36]
+  DOH: [25.27, 51.61]
+  AUH: [24.43, 54.65]
+  TLV: [32.01, 34.89]
+  JED: [21.68, 39.16]
+  RUH: [24.96, 46.70]
+  SYD: [-33.95, 151.18]
+  MEL: [-37.67, 144.84]
+  AKL: [-37.01, 174.79]
+  BNE: [-27.38, 153.12]
+  PER: [-31.94, 115.97]
+  GRU: [-23.43, -46.47]
+  EZE: [-34.82, -58.54]
+  SCL: [-33.39, -70.79]
+  BOG: [4.70, -74.15]
+  LIM: [-12.02, -77.11]
+  JNB: [-26.13, 28.24]
+  CPT: [-33.97, 18.60]
+  CAI: [30.12, 31.41]
+  NBO: [-1.32, 36.93]
+  LOS: [6.58, 3.32]
+  ADD: [8.98, 38.80]
 
 programs:
   turkish:

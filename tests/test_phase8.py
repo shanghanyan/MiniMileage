@@ -108,12 +108,19 @@ def test_discovered_rows_resolve_through_aggregator() -> None:
         route = Route("LAX", "IST", Cabin.BUSINESS)
         quotes = provider.fetch(Query(route=route, layer=Layer.CHARTS, programs=["turkish"]))
 
-        turkish = [q for q in quotes if q.program == "turkish"]
-        assert turkish, "discovered Turkish chart row did not resolve LAX->IST business"
-        q = turkish[0]
-        assert q.miles == 45000
-        assert "llm_extracted" in q.flags
-        assert q.provenance.source_name.startswith("email:")
+        # The discovered (email) row must resolve and carry the llm_extracted
+        # flag. Other curated/scraped Turkish rows may also resolve for the same
+        # route (e.g. the awardatlas fixture) — we specifically assert the
+        # discovery-sourced quote is present.
+        discovered = [
+            q
+            for q in quotes
+            if q.program == "turkish"
+            and "llm_extracted" in q.flags
+            and q.provenance.source_name.startswith("email:")
+        ]
+        assert discovered, "discovered Turkish chart row did not resolve LAX->IST business"
+        assert discovered[0].miles == 45000
 
 
 def test_real_atf_chart_actually_parses() -> None:
@@ -123,9 +130,15 @@ def test_real_atf_chart_actually_parses() -> None:
     assert rows, "parser found no rows in the real ATF chart page"
     # Picked the chart table, not the decoy nav/FAQ tables.
     assert all(r.program == "aeroplan" for r in rows)
-    # A known real value: North America <-> Atlantic, 0-4,000 mi, business = 60,000.
+    # Regions are now CANONICALIZED (§A): "Between North America and Atlantic"
+    # -> ("north_america", "europe"), with the distance band attached. A known
+    # real value: NA <-> Atlantic, 0-4,000 mi, business = 60,000.
     assert any(
-        "north america" in r.region_a and r.cabin == "business" and r.miles == 60000
+        r.region_a == "north_america"
+        and r.region_b == "europe"
+        and r.cabin == "business"
+        and r.miles == 60000
+        and (r.distance_min, r.distance_max) == (0, 4000)
         for r in rows
     )
     # Economy in the same band is 35,000 (not the premium/first columns).
