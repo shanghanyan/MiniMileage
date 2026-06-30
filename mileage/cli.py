@@ -603,6 +603,54 @@ def run_demo(registry: ProviderRegistry, repo: Repository, config: Config) -> in
 # --------------------------------------------------------------------------- #
 # Argparse
 # --------------------------------------------------------------------------- #
+def run_discover(config: Config, *, dry_run: bool = False) -> int:
+    """Discovery intake (§6.1): mailbox -> local extractor -> grounded rows.
+
+    Connects to `occulosequor@gmail.com` over IMAP when GMAIL_ADDRESS +
+    GMAIL_APP_PASSWORD are set (and not offline); otherwise reads `.eml`
+    fixtures so the pipeline still runs. Extracted rows are number-grounded and
+    persisted to knowledge/discovered_charts.json, where the aggregator resolves
+    them for a route through the same verify/graph path — flagged
+    `llm_extracted`, so they can only ever produce `tentative_best`.
+    """
+    from .providers.aggregator.ingest import (
+        discovered_path,
+        run_discovery,
+        write_discovered,
+    )
+
+    result = run_discovery(config)
+    source = "fixtures (.eml)" if result.used_fixtures else "live Gmail IMAP"
+    addr = config.gmail_address or "occulosequor@gmail.com"
+
+    print()
+    print(f"Discovery intake — mailbox: {addr}  ·  source: {source}")
+    print("=" * 68)
+    print(f"  documents ingested : {len(result.documents)}")
+    print(f"  grounded rows      : {len(result.rows)}")
+    if result.stale_programs:
+        print(f"  devaluation -> stale: {', '.join(sorted(result.stale_programs))}")
+    print("-" * 68)
+    for r in result.rows:
+        print(
+            f"  {r['program']:<10} {r['region_a']} -> {r['region_b']:<14} "
+            f"{r['cabin']:<16} {r['miles']:>7,} mi   [{r['source_name']}]"
+        )
+    if not result.rows:
+        print("  (no number-grounded chart rows found in the ingested documents)")
+    print("-" * 68)
+
+    if dry_run:
+        print("  --dry-run: nothing written.")
+        return 0
+
+    path = discovered_path(config.knowledge_dir)
+    write_discovered(path, result.rows, result.stale_programs)
+    print(f"  wrote {path.name} ({len(result.rows)} rows) — aggregator will use it.")
+    print()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mileage", description=__doc__)
     parser.add_argument("--verbose", action="store_true", help="debug logging")
@@ -643,6 +691,17 @@ def build_parser() -> argparse.ArgumentParser:
         "demo-observability",
         help="Phase 5: traceable runs + the anti-hallucination gate "
         "(poisoned chart rejected)",
+    )
+
+    d = sub.add_parser(
+        "discover",
+        help="discovery intake (§6.1): poll the mailbox, extract grounded "
+        "award-chart rows, persist them for the aggregator to use",
+    )
+    d.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="show what was extracted but do not write discovered_charts.json",
     )
 
     p = sub.add_parser("providers", help="provider federation status + quota")
@@ -699,6 +758,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         if args.command == "demo-observability":
             return run_demo_observability(config)
+
+        if args.command == "discover":
+            return run_discover(config, dry_run=getattr(args, "dry_run", False))
 
         if args.command == "demo":
             return run_demo(registry, repo, config)

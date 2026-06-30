@@ -12,6 +12,8 @@ Asserts the two properties the prose must not overclaim:
 
 from __future__ import annotations
 
+import os as _os; _os.environ.setdefault("MILEAGE_OFFLINE", "1")  # hermetic standalone runs
+
 import sys
 from pathlib import Path
 

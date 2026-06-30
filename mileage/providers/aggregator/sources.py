@@ -124,7 +124,10 @@ def validate_targets(
             continue
         ok, status = fetcher.head_ok(t.url)
         t.last_status = status
-        t.last_404 = (status == 404) or (not ok and status == 0)
+        # Only a real 404 (or 410 Gone) is permanent URL rot. A connection
+        # error / unknown (status 0 — offline, blocked egress, transient DNS)
+        # must NOT disable the source forever; it stays usable and is re-probed.
+        t.last_404 = status in (404, 410)
         t.last_checked = now
         log.info("validate %s -> status=%s ok=%s", t.name, status, ok)
         if health_repo is not None:

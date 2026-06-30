@@ -16,6 +16,8 @@ Runs standalone (`python tests/test_phase5.py`) and is pytest-discoverable.
 
 from __future__ import annotations
 
+import os as _os; _os.environ.setdefault("MILEAGE_OFFLINE", "1")  # hermetic standalone runs
+
 import sys
 import tempfile
 from pathlib import Path

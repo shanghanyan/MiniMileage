@@ -67,6 +67,20 @@ class Config:
     # impls are used. Falls back to in-proc if the server is unreachable.
     redis_url: Optional[str] = None
     auth_enabled: bool = False
+    # When True the aggregator never touches the network: only `file://`
+    # fixtures resolve (live HTTP + Wayback short-circuit to None). Set via
+    # MILEAGE_OFFLINE=1. This is what makes the test suite and `mileage eval`
+    # deterministic and hang-proof regardless of network reachability. The
+    # default reads the environment so even a bare `Config()` (as built in
+    # tests) honors MILEAGE_OFFLINE without threading it through every caller.
+    offline: bool = field(
+        default_factory=lambda: os.getenv("MILEAGE_OFFLINE", "")
+        not in ("", "0", "false")
+    )
+    # Gmail mailbox for the discovery intake (§6.1). Read from the environment
+    # (.env), never hardcoded. App-Password IMAP only — no OAuth, no Gmail API.
+    gmail_address: Optional[str] = None
+    gmail_app_password: Optional[str] = None
 
     @property
     def sources_path(self) -> Path:
@@ -93,6 +107,9 @@ class Config:
             disabled_providers=disabled,
             redis_url=os.getenv("MILEAGE_REDIS_URL") or None,
             auth_enabled=os.getenv("MILEAGE_AUTH", "") not in ("", "0", "false"),
+            offline=os.getenv("MILEAGE_OFFLINE", "") not in ("", "0", "false"),
+            gmail_address=os.getenv("GMAIL_ADDRESS") or None,
+            gmail_app_password=os.getenv("GMAIL_APP_PASSWORD") or None,
         )
 
 
@@ -193,6 +210,7 @@ def build_registry(
             knowledge_dir=config.knowledge_dir,
             enabled=config.aggregator_enabled,
             health_repo=repo,
+            offline=config.offline,
         ),
         CuratedProvider(knowledge_dir=config.knowledge_dir),
         TravelpayoutsProvider(knowledge_dir=config.knowledge_dir),

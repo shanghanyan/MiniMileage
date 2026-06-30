@@ -20,6 +20,7 @@ No browser, no sensor-forging — that is the Brain (Engine B), quarantined (§8
 from __future__ import annotations
 
 import logging
+import os
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
@@ -85,6 +86,7 @@ class Fetcher:
         use_wayback: bool = True,
         impersonate: bool = False,
         wayback_api: Optional[str] = None,
+        offline: Optional[bool] = None,
     ) -> None:
         self.politeness = politeness or PolitenessPolicy()
         self.base_dir = Path(base_dir) if base_dir else Path.cwd()
@@ -94,6 +96,17 @@ class Fetcher:
         self.wayback_api = wayback_api or self.DEFAULT_WAYBACK_API
         # Only impersonate when explicitly asked AND the optional dep is present.
         self.impersonate = impersonate and _HAS_CURL_CFFI
+        # Offline mode: only `file://` fixtures resolve; live HTTP + Wayback are
+        # short-circuited to None. This makes the test suite and `mileage eval`
+        # deterministic and network-free — the exact same parse path runs, just
+        # from disk — and guarantees a run can never hang on a blocked network.
+        # An explicit offline=True/False always wins; when left unset (None) we
+        # read MILEAGE_OFFLINE from the environment. That keeps a default-built
+        # Fetcher hermetic under the test env while letting a test that needs the
+        # real HTTP path opt in with offline=False.
+        if offline is None:
+            offline = os.getenv("MILEAGE_OFFLINE", "") not in ("", "0", "false")
+        self.offline = offline
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -103,6 +116,11 @@ class Fetcher:
         scheme = urllib.parse.urlparse(url).scheme
         if scheme == "file" or scheme == "":
             return self._get_file(url)
+
+        if self.offline:
+            # Network-free: live targets resolve to nothing; only fixtures load.
+            log.debug("offline mode: skipping live fetch for %s", url)
+            return None
 
         domain = urllib.parse.urlparse(url).netloc
 
@@ -133,6 +151,10 @@ class Fetcher:
         if scheme in ("file", ""):
             ok = self._resolve_file(url).exists()
             return ok, (200 if ok else 404)
+        if self.offline:
+            # Can't probe a live URL with no network; report unknown (status 0),
+            # which the caller must NOT treat as a permanent 404 (URL rot).
+            return False, 0
         try:
             resp = httpx.head(
                 url, headers=_DEFAULT_HEADERS, timeout=self.timeout,
@@ -249,12 +271,16 @@ class Fetcher:
     def _resolve_file(self, url: str) -> Path:
         parsed = urllib.parse.urlparse(url)
         if parsed.scheme == "file":
-            if parsed.netloc:
+            # Percent-decode so paths with spaces (e.g. ".../Complete Mini
+            # Project/...", or any as_uri() output) resolve correctly.
+            netloc = urllib.parse.unquote(parsed.netloc)
+            ppath = urllib.parse.unquote(parsed.path)
+            if netloc:
                 # file://relative/path -> netloc='relative', path='/path'
-                path = Path(parsed.netloc + parsed.path)
+                path = Path(netloc + ppath)
             else:
                 # file:///abs/path -> netloc='', path='/abs/path'
-                path = Path(parsed.path)
+                path = Path(ppath)
         else:
             path = Path(url)
         if not path.is_absolute():

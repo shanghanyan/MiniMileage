@@ -103,46 +103,104 @@ def _to_bool(value) -> bool:
 # --------------------------------------------------------------------------- #
 # HTML table parser (aggregators / blogs publishing an award chart)
 # --------------------------------------------------------------------------- #
-class _ChartTableParser(HTMLParser):
-    """Extract rows from the first <table> carrying the expected headers.
+@dataclass
+class _ParsedTable:
+    header: list[str]
+    rows: list[list[str]]
 
-    Expected header cells (case-insensitive, order-independent):
-        program | from | to | cabin | miles | roundtrip(optional)
+
+class _ChartTableParser(HTMLParser):
+    """Collect EVERY <table> on the page as (header, rows).
+
+    Real pages (e.g. awardtravelfinder.com) carry many tables — navigation,
+    FAQ, the chart — so we cannot assume the chart is the first one. The parse
+    functions below pick the table whose header actually matches (header-hit =
+    selector-hit, the anti-hallucination contract); a page with no matching
+    table yields nothing rather than guessing.
+
+    `.header`/`.rows` expose the FIRST table for backward compatibility.
     """
 
     def __init__(self) -> None:
         super().__init__()
-        self._in_table = False
+        self._depth = 0          # nesting depth of open <table>s
         self._in_cell = False
         self._row: list[str] = []
         self._cell: list[str] = []
-        self.header: list[str] = []
-        self.rows: list[list[str]] = []
+        self._cur_header: list[str] = []
+        self._cur_rows: list[list[str]] = []
+        self.tables: list[_ParsedTable] = []
 
     def handle_starttag(self, tag, attrs):
-        if tag == "table" and not self.rows and not self.header:
-            self._in_table = True
-        elif self._in_table and tag in ("td", "th"):
+        if tag == "table":
+            if self._depth == 0:
+                self._cur_header = []
+                self._cur_rows = []
+                self._row = []
+            self._depth += 1
+        elif self._depth and tag in ("td", "th"):
             self._in_cell = True
             self._cell = []
 
     def handle_endtag(self, tag):
-        if tag == "table":
-            self._in_table = False
-        elif self._in_table and tag in ("td", "th"):
+        if tag == "table" and self._depth:
+            self._depth -= 1
+            if self._depth == 0:
+                if self._row:  # flush a final unterminated row
+                    self._flush_row()
+                self.tables.append(
+                    _ParsedTable(header=self._cur_header, rows=self._cur_rows)
+                )
+        elif self._depth and tag in ("td", "th"):
             self._in_cell = False
             self._row.append("".join(self._cell).strip())
-        elif self._in_table and tag == "tr":
-            if self._row:
-                if not self.header:
-                    self.header = [c.lower() for c in self._row]
-                else:
-                    self.rows.append(self._row)
-            self._row = []
+        elif self._depth and tag == "tr":
+            self._flush_row()
+
+    def _flush_row(self) -> None:
+        if self._row:
+            if not self._cur_header:
+                self._cur_header = [c.lower() for c in self._row]
+            else:
+                self._cur_rows.append(self._row)
+        self._row = []
 
     def handle_data(self, data):
         if self._in_cell:
             self._cell.append(data)
+
+    # Backward-compatible single-table view (first table on the page).
+    @property
+    def header(self) -> list[str]:
+        return self.tables[0].header if self.tables else []
+
+    @property
+    def rows(self) -> list[list[str]]:
+        return self.tables[0].rows if self.tables else []
+
+
+def _select_table(
+    tables: list["_ParsedTable"], required: tuple[str, ...]
+) -> Optional["_ParsedTable"]:
+    """First table whose header contains every `required` column (selector-hit)."""
+    for t in tables:
+        if t.header and all(k in t.header for k in required):
+            return t
+    return None
+
+
+def _select_wide_table(tables: list["_ParsedTable"]) -> Optional["_ParsedTable"]:
+    """First table that looks like a wide award chart: from + to/distance + cabin."""
+    for t in tables:
+        hdr = [h.strip().lower() for h in t.header]
+        if "from" not in hdr:
+            continue
+        if not any(c in hdr for c in ("to", "distance")):
+            continue
+        if not any(_WIDE_CABIN_MAP.get(h) for h in hdr):
+            continue
+        return t
+    return None
 
 
 def parse_chart_html(text: str, *, updated_at: Optional[str] = None) -> list[RawChartRow]:
@@ -152,16 +210,15 @@ def parse_chart_html(text: str, *, updated_at: Optional[str] = None) -> list[Raw
     except Exception as exc:
         log.info("html parse error: %s", exc)
         return []
-    if not parser.header:
-        return []
-    idx = {name: i for i, name in enumerate(parser.header)}
     required = ("program", "from", "to", "cabin", "miles")
-    if not all(k in idx for k in required):
-        log.info("html table missing required headers: %s", parser.header)
+    table = _select_table(parser.tables, required)
+    if table is None:
+        log.info("no long-format chart table found")
         return []
+    idx = {name: i for i, name in enumerate(table.header)}
 
     out: list[RawChartRow] = []
-    for cells in parser.rows:
+    for cells in table.rows:
         if len(cells) < len(required):
             continue
         miles = _to_int(cells[idx["miles"]])
@@ -206,21 +263,17 @@ def parse_chart_html_wide(
     except Exception as exc:
         log.info("html_wide parse error: %s", exc)
         return []
-    if not parser.header:
+
+    table = _select_wide_table(parser.tables)
+    if table is None:
+        log.info("html_wide: no wide award-chart table found on page")
         return []
 
-    header = [h.strip().lower() for h in parser.header]
+    header = [h.strip().lower() for h in table.header]
     idx = {name: i for i, name in enumerate(header)}
-
-    if "from" not in idx:
-        log.info("html_wide: no 'from' column in %s", header)
-        return []
 
     # Accept 'to' (LifeMiles zone pairs) or 'distance' (Aeroplan distance bands)
     zone_col = next((c for c in ("to", "distance") if c in idx), None)
-    if zone_col is None:
-        log.info("html_wide: no 'to'/'distance' column in %s", header)
-        return []
 
     # Collect cabin columns in header order
     cabin_cols: list[tuple[str, str]] = []  # (header_key, canonical_cabin)
@@ -228,13 +281,10 @@ def parse_chart_html_wide(
         canonical = _WIDE_CABIN_MAP.get(label)
         if canonical:
             cabin_cols.append((label, canonical))
-    if not cabin_cols:
-        log.info("html_wide: no cabin columns in %s", header)
-        return []
 
     out: list[RawChartRow] = []
     prog = program.strip().lower()
-    for cells in parser.rows:
+    for cells in table.rows:
         if len(cells) <= max(idx["from"], idx[zone_col]):
             continue
         region_a = cells[idx["from"]].strip().lower()

@@ -39,6 +39,7 @@ from .parse import (
     parse_chart_json,
     parse_rss,
 )
+from .ingest import load_discovered_rows, load_stale_programs
 from .politeness import PolitenessPolicy
 from .sources import Target, apply_persisted_health, load_targets, validate_targets
 
@@ -75,6 +76,8 @@ class AggregatorProvider:
         fetcher: Optional[Fetcher] = None,
         enabled: bool = True,
         health_repo: Any = None,
+        offline: Optional[bool] = None,
+        discovered_path: Optional[Path] = None,
     ) -> None:
         self._dir = Path(knowledge_dir) if knowledge_dir else _KNOWLEDGE_DIR
         self._sources_path = (
@@ -87,7 +90,15 @@ class AggregatorProvider:
         if health_repo is not None:
             apply_persisted_health(self.targets, health_repo)
         self.fetcher = fetcher or Fetcher(
-            politeness=PolitenessPolicy(), base_dir=self._dir
+            politeness=PolitenessPolicy(), base_dir=self._dir, offline=offline
+        )
+        # Intake (b): rows the discovery mode (§6.1 — email/blog/transcript)
+        # extracted and persisted. Loaded here so discovered charts flow through
+        # the SAME _build_charts -> verify -> graph path as scraped URLs.
+        self._discovered_path = (
+            Path(discovered_path)
+            if discovered_path
+            else self._dir / "discovered_charts.json"
         )
 
     # --- Provider interface ------------------------------------------------ #
@@ -164,6 +175,7 @@ class AggregatorProvider:
         self, route: Route, wanted: Optional[set]
     ) -> list[AwardQuote]:
         out: list[AwardQuote] = []
+        stale = load_stale_programs(self._discovered_path)
         for target in self._targets_for("chart"):
             result = self._read(target)
             if result is None:
@@ -180,6 +192,8 @@ class AggregatorProvider:
                     target, result, chart.get("_updated_at")
                 )
                 flags = ["no_live_space", *hit.flags]
+                if program in stale:  # devaluation fast-path (§6.2)
+                    flags.append("stale")
                 if "from_wayback" in result.flags:
                     flags.append("from_wayback")
                 out.append(
@@ -193,6 +207,69 @@ class AggregatorProvider:
                         flags=flags,
                     )
                 )
+        out.extend(self._fetch_discovered_charts(route, wanted))
+        return out
+
+    def _fetch_discovered_charts(
+        self, route: Route, wanted: Optional[set]
+    ) -> list[AwardQuote]:
+        """Intake (b): resolve discovery-extracted rows for this route (§6.1).
+
+        Discovered rows (email/blog/transcript) live in `discovered_charts.json`
+        with per-row provenance and are flagged `llm_extracted` so a winner that
+        rests on one can only ever be `tentative_best`, never `best`, until an
+        independent source confirms it (the verification core enforces this).
+        """
+        rows = load_discovered_rows(self._discovered_path)
+        if not rows:
+            return []
+        stale = load_stale_programs(self._discovered_path)
+        out: list[AwardQuote] = []
+        # Group by (program, source) so each independent source cross-checks and
+        # carries its own provenance — two intakes echoing one post are NOT
+        # independent (crosscheck keys on source_name).
+        by_src: dict[tuple[str, str], list[RawChartRow]] = {}
+        meta: dict[tuple[str, str], dict] = {}
+        for raw, source_name, source_url, source_updated_at, trust in rows:
+            key = (raw.program, source_name)
+            by_src.setdefault(key, []).append(raw)
+            meta[key] = {
+                "source_url": source_url,
+                "source_updated_at": source_updated_at,
+                "trust": trust,
+            }
+        for (program, source_name), prog_rows in by_src.items():
+            if wanted and program not in wanted:
+                continue
+            chart = self._build_charts(prog_rows).get(program)
+            if chart is None:
+                continue
+            hit = lookup_award_miles(program, chart, route, self._region_map)
+            if hit is None:
+                continue
+            m = meta[(program, source_name)]
+            prov = Provenance(
+                source_name=source_name,
+                source_url=m.get("source_url"),
+                trust=float(m.get("trust") or 0.3),
+                source_updated_at=_parse_date(
+                    m.get("source_updated_at") or chart.get("_updated_at")
+                ),
+            )
+            flags = ["no_live_space", "llm_extracted", *hit.flags]
+            if program in stale:
+                flags.append("stale")
+            out.append(
+                AwardQuote(
+                    program=program,
+                    route=route,
+                    miles=hit.miles,
+                    seats_available=None,
+                    provenance=prov,
+                    confidence=prov.trust,
+                    flags=flags,
+                )
+            )
         return out
 
     def _parse_chart_rows(self, target: Target, text: str) -> list[RawChartRow]:

@@ -183,6 +183,45 @@ In the browser, the UI picks up an optional `?token=alice` query param (or
 `?token=alice` and `?token=bob` against an `MILEAGE_AUTH=1` API to watch each
 user get a verdict against their own balances.
 
+## What Phase 8 adds — discovery intake (email) + local extractor
+
+The aggregator now has a second intake mode (§6.1): the mailbox
+`occulosequor@gmail.com` is a standing feed. `mileage discover` polls unread
+mail over IMAP (App Password only — no Gmail API/OAuth), takes each body as a
+document, and runs it through a **local, keyless** deterministic extractor
+(`providers/aggregator/extract/`) that turns prose into chart rows. Every
+number passes a **verbatim-grounding guard** — a `miles` value that doesn't
+appear literally in the source is dropped — and a `"<program> devaluation"`
+subject flips that program's charts to `stale`. Extracted rows are persisted to
+`knowledge/discovered_charts.json` and resolved by the aggregator through the
+**same `_build_charts → verify → graph` path** as scraped URLs, flagged
+`llm_extracted` (so they can only ever be `tentative_best`, never `best`, until
+an independent source confirms). The extractor sits behind an `LLMExtractor`
+interface, so a local Qwen/Ollama backend is a drop-in later — the grounding
+guard gates the output either way.
+
+```bash
+# Set GMAIL_ADDRESS + GMAIL_APP_PASSWORD in .env (App Password, no OAuth).
+# With no creds (or MILEAGE_OFFLINE=1) it reads the bundled .eml fixtures.
+python -m mileage.cli discover            # poll, extract, persist
+python -m mileage.cli discover --dry-run  # show extracted rows, write nothing
+```
+
+## Offline / deterministic mode
+
+`MILEAGE_OFFLINE=1` pins the aggregator to its `file://` fixtures — no live
+HTTP, no Wayback. The test suite sets this automatically (`tests/conftest.py`
+for pytest, plus a one-line guard in each standalone test), so the suite is
+**hermetic and can't hang on a blocked network** — the failure mode where live
+URLs in `sources.yaml` made each fetch block on a 10s timeout under the
+politeness backoff. A transient probe failure (status 0) no longer marks a live
+source permanently dead in `--validate-urls`; only a real 404/410 does.
+
+```bash
+python tests/test_phase8.py      # discovery intake + extractor (offline)
+MILEAGE_OFFLINE=1 python -m mileage.cli demo
+```
+
 ## Install
 
 ```bash

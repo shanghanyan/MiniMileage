@@ -16,6 +16,8 @@ Asserts the properties Phase 1 adds without breaking Phase 0's honesty:
 
 from __future__ import annotations
 
+import os as _os; _os.environ.setdefault("MILEAGE_OFFLINE", "1")  # hermetic standalone runs
+
 import contextlib
 import http.server
 import json
@@ -213,7 +215,9 @@ def test_fetch_429_backoff_then_success_real_http() -> None:
     delays: list[float] = []
     pol = PolitenessPolicy(base_delay=0.05, jitter=0.0, sleep=lambda *_: None)
     with _server(flaky_fail_times=2) as (srv, base):
-        fetcher = Fetcher(politeness=pol, max_429_retries=3, use_wayback=False)
+        fetcher = Fetcher(
+            politeness=pol, max_429_retries=3, use_wayback=False, offline=False
+        )
         domain = base.split("//", 1)[1]
         before = pol.delay_for(domain)
         result = fetcher.get(f"{base}/flaky")
@@ -237,6 +241,7 @@ def test_fetch_403_falls_back_to_wayback_real_http() -> None:
             politeness=PolitenessPolicy(base_delay=0.0, jitter=0.0, sleep=lambda *_: None),
             use_wayback=True,
             wayback_api=f"{base}/wb?url=",
+            offline=False,
         )
         result = fetcher.get(f"{base}/blocked")
     paths = [h for h in srv.hits]
