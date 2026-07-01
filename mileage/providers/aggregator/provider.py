@@ -34,6 +34,7 @@ from .parse import (
     RawChartRow,
     normalize_one_way,
     parse_award_json,
+    parse_chart_destination_table,
     parse_chart_html,
     parse_chart_html_wide,
     parse_chart_json,
@@ -369,6 +370,13 @@ class AggregatorProvider:
         if target.format == "html_table_wide":
             prog = target.program or target.name
             return parse_chart_html_wide(text, program=prog, updated_at=target.updated_at)
+        if target.format == "html_table_destination":
+            # Hub-based per-destination guide page (Turkish/KrisFlyer): origin is
+            # the program hub, each row a specific destination airport (§6).
+            prog = target.program or target.name
+            return parse_chart_destination_table(
+                text, program=prog, hub=target.hub or "", updated_at=target.updated_at
+            )
         if target.format == "json":
             return parse_chart_json(text)
         if target.format == "rss":
@@ -386,13 +394,23 @@ class AggregatorProvider:
         charts: dict[str, dict] = {}
         for r in rows:
             spec = charts.setdefault(r.program, {"bands": [], "_updated_at": None})
-            band: dict = {
-                "regions": [r.region_a, r.region_b],
-                "roundtrip": r.roundtrip,
-                "miles": {r.cabin: r.miles},
-            }
-            if r.distance_min is not None and r.distance_max is not None:
-                band["distance"] = [r.distance_min, r.distance_max]
+            if r.origin_airport and r.dest_airport:
+                # Exact per-airport band (hub-based destination table). Keyed on
+                # the specific O->D pair, NOT a region, so the resolver returns
+                # this city's own price and never collapses a region.
+                band: dict = {
+                    "airports": [r.origin_airport, r.dest_airport],
+                    "roundtrip": r.roundtrip,
+                    "miles": {r.cabin: r.miles},
+                }
+            else:
+                band = {
+                    "regions": [r.region_a, r.region_b],
+                    "roundtrip": r.roundtrip,
+                    "miles": {r.cabin: r.miles},
+                }
+                if r.distance_min is not None and r.distance_max is not None:
+                    band["distance"] = [r.distance_min, r.distance_max]
             spec["bands"].append(band)
             if r.updated_at and not spec["_updated_at"]:
                 spec["_updated_at"] = r.updated_at

@@ -32,8 +32,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mileage.domain.models import Cabin, Layer, Route
 from mileage.providers.aggregator.fetch import Fetcher
 from mileage.providers.aggregator.parse import (
-    parse_chart_html, parse_chart_html_wide, parse_award_json,
-    parse_chart_json, parse_rss, parse_chart_pdf,
+    parse_chart_html, parse_chart_html_wide, parse_chart_destination_table,
+    parse_award_json, parse_chart_json, parse_rss, parse_chart_pdf,
 )
 from mileage.providers.aggregator.provider import AggregatorProvider
 from mileage.providers.aggregator.sources import load_targets
@@ -46,6 +46,7 @@ _KNOWLEDGE = Path(__file__).resolve().parent.parent / "mileage" / "knowledge"
 _PROBES = [
     Route("LAX", "IST", Cabin.BUSINESS),  # Demo B: Aeroplan / LifeMiles / Turkish
     Route("LAX", "JFK", Cabin.ECONOMY),   # Demo A: Aeroplan
+    Route("SIN", "JFK", Cabin.BUSINESS),  # KrisFlyer hub-based guide (SIN origin)
 ]
 
 # Programs we hold to the strict bar: failing to resolve EITHER probe is a hard
@@ -74,6 +75,14 @@ def _parse_rows(target, result, stats):
     if fmt == "html_table_wide":
         prog = target.program or target.name
         return parse_chart_html_wide(result.text, program=prog, stats=stats)
+    if fmt == "html_table_destination":
+        # Hub-based per-destination guide page (Turkish/KrisFlyer): origin is the
+        # program hub, each row a specific destination airport. Mirrors the
+        # production dispatch in AggregatorProvider._parse_chart_rows.
+        prog = target.program or target.name
+        return parse_chart_destination_table(
+            result.text, program=prog, hub=target.hub or "", stats=stats
+        )
     if fmt == "json":
         if target.provides == "award":
             return parse_award_json(result.text)
@@ -128,6 +137,26 @@ def _diagnose_zero_rows(target, result) -> str:
             f"{prefix}, tables={tables}) — body has {tables} table(s) but none "
             "match the from/to/distance + cabin wide schema (schema mismatch — "
             "e.g. a guide/prose page). Parser working as designed on this shape."
+        )
+
+    if fmt == "html_table_destination":
+        tables = result.text.lower().count("<table")
+        if _looks_undecoded(result.text):
+            return (
+                f"{prefix}, tables=?) — body is UNDECODED (mostly non-printable): "
+                "server sent a content-encoding we can't inflate (install the "
+                "[aggregator] extra for brotli/zstd). NOT a parser bug."
+            )
+        if tables == 0:
+            return (
+                f"{prefix}, tables=0) — no <table> in body: JS-rendered shell, "
+                "wrong URL, or non-HTML content. A fetch/source problem, not the parser."
+            )
+        return (
+            f"{prefix}, tables={tables}) — body has {tables} table(s) but the "
+            "destination parser matched no 'destination | code | cabin<tier>' guide "
+            "table (header/tier-label drift on the live page, or all rows dropped on "
+            "an unmappable IATA code). Check the hub and the live table headers."
         )
 
     if fmt == "pdf":

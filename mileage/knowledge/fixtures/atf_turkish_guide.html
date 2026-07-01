@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head><title>Turkish Miles&Smiles Award Chart Guide</title></head>
+<body>
+<h1>Turkish Miles&Smiles — Redeem from Istanbul (IST)</h1>
+<p>Off-peak saver pricing, one-way, per destination from the Turkish hub.</p>
+
+<!-- Decoy: a navigation table with no cabin columns. The selector must skip it
+     rather than emit garbage (anti-hallucination: header-hit = selector-hit). -->
+<table>
+  <tr><th>Region</th><th>Jump to</th></tr>
+  <tr><td>North America</td><td>#na</td></tr>
+  <tr><td>Europe</td><td>#eu</td></tr>
+</table>
+
+<h2 id="eu">Europe</h2>
+<table>
+  <tr><th>Destination</th><th>Code</th><th>EconomyOff-Peak</th><th>BusinessOff-Peak</th><th>FirstOff-Peak</th><th></th></tr>
+  <tr><td>Amsterdam</td><td>AMS</td><td>15,000</td><td>30,000</td><td>—</td><td>Details →</td></tr>
+  <tr><td>Athens</td><td>ATH</td><td>12,500</td><td>25,000</td><td>—</td><td>Details →</td></tr>
+  <tr><td>Barcelona</td><td>BCN</td><td>15,000</td><td>30,000</td><td>—</td><td>Details →</td></tr>
+</table>
+
+<h2 id="na">North America</h2>
+<table>
+  <tr><th>Destination</th><th>Code</th><th>EconomyOff-Peak</th><th>BusinessOff-Peak</th><th>FirstOff-Peak</th><th></th></tr>
+  <tr><td>Chicago</td><td>ORD</td><td>45,000</td><td>90,000</td><td>—</td><td>Details →</td></tr>
+  <tr><td>Houston</td><td>IAH</td><td>45,000</td><td>90,000</td><td>—</td><td>Details →</td></tr>
+  <tr><td>Los Angeles</td><td>LAX</td><td>50,000</td><td>100,000</td><td>135,000</td><td>Details →</td></tr>
+  <tr><td>Miami</td><td>MIA</td><td>45,000</td><td>90,000</td><td>120,000</td><td>Details →</td></tr>
+  <!-- Malformed row (no IATA code): dropped + counted, never guessed. -->
+  <tr><td>Coming soon</td><td>—</td><td>—</td><td>—</td><td>—</td><td>Details →</td></tr>
+</table>
+
+</body>
+</html>

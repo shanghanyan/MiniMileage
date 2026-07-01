@@ -62,8 +62,8 @@ _WIDE_CABIN_MAP: dict[str, str] = {
 @dataclass
 class RawChartRow:
     program: str
-    region_a: str
-    region_b: str
+    region_a: Optional[str]
+    region_b: Optional[str]
     cabin: str
     miles: int
     roundtrip: bool = False
@@ -72,6 +72,14 @@ class RawChartRow:
     # row applies to. None for ordinary zone-pair charts (§A.4).
     distance_min: Optional[int] = None
     distance_max: Optional[int] = None
+    # Exact per-airport rows (hub-based "destination table" charts — Turkish /
+    # KrisFlyer guide pages). When set, this row is keyed on a SPECIFIC O->D
+    # airport pair, not a region pair, so the resolver returns the destination's
+    # own price instead of collapsing a whole region to one (often wrong) number
+    # — e.g. IST->LAX business (100k) differs from IST->ORD (90k). region_a/
+    # region_b stay None for these; the resolver matches on the airport pair.
+    origin_airport: Optional[str] = None
+    dest_airport: Optional[str] = None
 
 
 @dataclass
@@ -404,6 +412,152 @@ def _emit_wide_rows(
                 )
             )
     return out, dropped
+
+
+# --------------------------------------------------------------------------- #
+# Destination-table parser (hub-based "guide" pages — Turkish, KrisFlyer)
+# --------------------------------------------------------------------------- #
+# A guide page is NOT a from/to region chart. It is a hub-based, per-destination
+# table: origin is IMPLICITLY the program's hub (IST for Turkish, SIN for
+# KrisFlyer) and every row is one destination airport with its own price:
+#
+#   Destination | Code | Economy<tier> | Business<tier> | First<tier> | ...
+#   Los Angeles | LAX  | 50,000        | 100,000        | 135,000     | ...
+#
+# Real pages carry several such tables (one per world region) and mix regions
+# within a single table (KrisFlyer's "Asia" table spans South + SE Asia), so we
+# consume EVERY destination-shaped table on the page and key each row on its
+# exact IATA code — the resolver then answers the queried city precisely rather
+# than collapsing a region (where IST->LAX 100k != IST->ORD 90k) to one number.
+_IATA_RE = re.compile(r"^[A-Z]{3}$")
+
+# Cabin columns on guide pages carry a tier suffix ("EconomyOff-Peak",
+# "BusinessSaver", "First/SuitesSaver"). We match by substring, longest/most-
+# specific first so "premium economy" beats "economy" and "first/suites" -> first.
+_DEST_CABIN_KEYS: list[tuple[str, str]] = [
+    ("premium economy", "premium_economy"),
+    ("premiumeconomy", "premium_economy"),
+    ("business", "business"),
+    ("first", "first"),
+    ("suite", "first"),
+    ("economy", "economy"),
+]
+
+
+def _dest_cabin(header_cell: str) -> Optional[str]:
+    """Map a destination-table header cell to a canonical cabin, or None."""
+    h = re.sub(r"[^a-z0-9]+", " ", header_cell.lower()).strip()
+    if not h:
+        return None
+    # 'premium economy' must win over 'economy' even though both substrings hit.
+    if "premium" in h and "economy" in h:
+        return "premium_economy"
+    for needle, cabin in _DEST_CABIN_KEYS:
+        if needle in h:
+            return cabin
+    return None
+
+
+def _is_destination_table(header: list[str]) -> bool:
+    """True for a hub-based per-destination table: a destination/code column
+    plus >=1 cabin column, and NOT a from/to wide chart (guarded so a page that
+    happens to carry both shapes routes each to its own parser)."""
+    hdr = [h.strip().lower() for h in header]
+    if "from" in hdr:  # that's a wide region chart — not ours
+        return False
+    if not any(h in ("code", "destination", "airport") for h in hdr):
+        return False
+    return any(_dest_cabin(h) for h in hdr)
+
+
+def parse_chart_destination_table(
+    text: str,
+    *,
+    program: str,
+    hub: str,
+    updated_at: Optional[str] = None,
+    stats: Optional[dict] = None,
+) -> list[RawChartRow]:
+    """Parse hub-based per-destination "guide" tables into exact-airport rows.
+
+    `hub` is the program's origin airport (IST, SIN, …); every row's origin is
+    the hub and its destination is the row's IATA `code`. Each non-null cabin
+    cell yields one `RawChartRow` keyed on the exact (hub, code) airport pair
+    (region_a/region_b left None). A row without a 3-letter code column, or with
+    no parseable cabin cell, is a selector miss and produces nothing — the same
+    no-hallucination contract as every other parser.
+    """
+    parser = _ChartTableParser()
+    try:
+        parser.feed(text)
+    except Exception as exc:
+        log.info("destination-table parse error: %s", exc)
+        return []
+
+    hub = (hub or "").strip().upper()
+    if not _IATA_RE.match(hub):
+        log.info("destination-table: invalid/absent hub %r for %s", hub, program)
+        return []
+
+    prog = program.strip().lower()
+    out: list[RawChartRow] = []
+    dropped = 0
+    matched_any = False
+    for t in parser.tables:
+        if not _is_destination_table(t.header):
+            continue
+        matched_any = True
+        header = [h.strip().lower() for h in t.header]
+        idx = {name: i for i, name in enumerate(header)}
+        code_i = idx.get("code", idx.get("airport"))
+        cabin_cols = [
+            (i, _dest_cabin(h)) for i, h in enumerate(header) if _dest_cabin(h)
+        ]
+        for cells in t.rows:
+            # Resolve the destination IATA code. Prefer an explicit code column;
+            # otherwise scan for a lone 3-letter uppercase token in the row.
+            code = None
+            if code_i is not None and code_i < len(cells):
+                cand = (cells[code_i] or "").strip().upper()
+                if _IATA_RE.match(cand):
+                    code = cand
+            if code is None:
+                for c in cells:
+                    cand = (c or "").strip().upper()
+                    if _IATA_RE.match(cand):
+                        code = cand
+                        break
+            if code is None:
+                dropped += 1  # no resolvable destination -> drop + count
+                continue
+            if code == hub:
+                continue  # hub->hub is not a real award
+            for col_i, cabin in cabin_cols:
+                if col_i >= len(cells):
+                    continue
+                miles = _wide_miles(cells[col_i] or "")
+                if miles is None:
+                    continue  # '—'/blank -> selector miss, never guessed
+                out.append(
+                    RawChartRow(
+                        program=prog,
+                        region_a=None,
+                        region_b=None,
+                        cabin=cabin,
+                        miles=miles,
+                        roundtrip=False,
+                        updated_at=updated_at,
+                        origin_airport=hub,
+                        dest_airport=code,
+                    )
+                )
+    if not matched_any:
+        log.info("destination-table: no per-destination table found on page")
+    if stats is not None:
+        stats["dropped"] = stats.get("dropped", 0) + dropped
+    if dropped:
+        log.info("destination-table: dropped %d row(s) with no IATA code", dropped)
+    return out
 
 
 # --------------------------------------------------------------------------- #

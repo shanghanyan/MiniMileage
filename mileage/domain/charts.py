@@ -73,14 +73,41 @@ def lookup_award_miles(
           ]
         }
     """
+    cabin_key = route.cabin.value
+    o = route.origin.upper()
+    d = route.dest.upper()
+    route_airports = sorted([o, d])
+
+    # Exact per-airport bands (hub-based "destination table" charts) take
+    # precedence: they carry the queried city's OWN price, so we never collapse a
+    # region to one (often wrong) number when we have the specific O->D pair.
+    # These don't need region_map, so they resolve even for airports we can't
+    # classify into a region.
+    for band in program_chart.get("bands", []):
+        airports = band.get("airports")
+        if not airports:
+            continue
+        if sorted(str(a).upper() for a in airports) != route_airports:
+            continue
+        raw = band.get("miles", {}).get(cabin_key)
+        if raw is None:
+            continue  # this pair matched but not this cabin — keep scanning
+        miles = int(raw)
+        flags: list[str] = []
+        if band.get("roundtrip", False):
+            miles = math.ceil(miles / 2)
+            flags.append("rt_to_ow_normalized")
+        return ChartHit(program=program, miles=miles, flags=flags)
+
     r_o = region_of(route.origin, region_map)
     r_d = region_of(route.dest, region_map)
     if r_o is None or r_d is None:
         return None
 
-    cabin_key = route.cabin.value
     gcm: Optional[float] = None
     for band in program_chart.get("bands", []):
+        if band.get("airports"):
+            continue  # exact-airport bands were handled above
         regions = band.get("regions", [])
         if len(regions) != 2 or not _bands_match(regions, r_o, r_d):
             continue

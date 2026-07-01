@@ -10,8 +10,9 @@
 # Target schema:
 #   name       unique source id (becomes provenance source_name)
 #   url        file:// (relative to this dir) or http(s)://
-#   format     html_table | html_table_wide | json | rss | pdf
-#   program    loyalty program this source covers (required for html_table_wide + pdf)
+#   format     html_table | html_table_wide | html_table_destination | json | rss | pdf
+#   program    loyalty program this source covers (required for html_table_wide + pdf + destination)
+#   hub        program origin airport, IATA (required for html_table_destination)
 #   provides   chart  (L4 — no live seat -> no_live_space flag)
 #              award  (L3 — live seat -> seats_available set)
 #   trust      [0,1] weight for rotation order + cross-check median
@@ -56,17 +57,17 @@ targets:
     updated_at: "2026-06-29"
     layers: [charts]
 
-  # Turkish Miles&Smiles: AwardTravelFinder "guide" page. NOTE (audited 2026-06):
-  # this is a guide-format page (per-destination tables: destination | code |
-  # economy<tier> | business<tier> | first<tier>), NOT the from/to wide-chart
-  # schema. The wide parser finds no matching table -> 0 rows (selector_miss).
-  # There is no /award-charts/turkish equivalent (it 404s). Recovering this
-  # source needs a dedicated "destination-table" parser; until then the
-  # 10x-turkish-chart fallback + discovery intake cover Turkish.
+  # Turkish Miles&Smiles: AwardTravelFinder "guide" page. This is a hub-based
+  # per-destination table (destination | code | economy<tier> | business<tier> |
+  # first<tier>) with origin IMPLICITLY the Turkish hub (IST) — NOT a from/to
+  # wide chart. Parsed by the html_table_destination parser, which keys each row
+  # on its exact IATA code so IST->LAX (100k biz) resolves distinctly from
+  # IST->ORD (90k biz) rather than collapsing all of North America to one price.
   - name: atf-turkish-chart
     url: https://awardtravelfinder.com/turkish-miles-guides
-    format: html_table_wide
+    format: html_table_destination
     program: turkish
+    hub: IST
     provides: chart
     trust: 0.80
     updated_at: "2026-06-29"
@@ -84,15 +85,16 @@ targets:
     updated_at: "2026-06-29"
     layers: [charts]
 
-  # Singapore KrisFlyer: AwardTravelFinder "guide" page. NOTE (audited 2026-06):
-  # guide-format (destination | code | economy<saver/adv> | business | first),
-  # NOT the from/to wide-chart schema -> wide parser yields 0 rows. No
-  # /award-charts/krisflyer|singapore equivalent (both 404). Needs the same
-  # destination-table parser as the Turkish guide above to be usable.
+  # Singapore KrisFlyer: AwardTravelFinder "guide" page. Hub-based per-destination
+  # table (destination | code | economy<saver> | business<saver> | first/suites),
+  # origin IMPLICITLY the KrisFlyer hub (SIN). Parsed by html_table_destination;
+  # keying on the exact code matters here too — SIN->LAX (112.5k biz) differs
+  # from SIN->JFK (117k biz) within North America.
   - name: atf-krisflyer-chart
     url: https://awardtravelfinder.com/singapore-krisflyer-guides
-    format: html_table_wide
+    format: html_table_destination
     program: krisflyer
+    hub: SIN
     provides: chart
     trust: 0.80
     updated_at: "2026-06-29"
