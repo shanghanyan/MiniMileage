@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import AirportInput from "./AirportInput";
 import DisconnectedPage from "./DisconnectedPage";
+import LiveScrapePage from "./LiveScrapePage";
 import {
   isKnownAirport,
   resolveAirport,
@@ -25,6 +26,7 @@ const STEPS: { key: PipelineStep; label: string; n: number }[] = [
 ];
 
 type DemoKey = "A" | "B";
+type View = "optimizer" | "scrape";
 
 const DEMOS: Record<
   DemoKey,
@@ -132,13 +134,16 @@ function isDemoEnabled(key: DemoKey): boolean {
 }
 
 export default function App() {
+  const [view, setView] = useState<View>("optimizer");
   const [origin, setOrigin] = useState("LAX");
   const [dest, setDest] = useState("IST");
   const [cabin, setCabin] = useState<
     "economy" | "premium_economy" | "business" | "first"
   >("business");
   const [miles, setMiles] = useState("90,000");
-  const [selectedDemo, setSelectedDemo] = useState<DemoKey | null>("B");
+  // No demo is preselected on load — the user opts into one explicitly (or types
+  // a route that matches, which the change handlers below then highlight).
+  const [selectedDemo, setSelectedDemo] = useState<DemoKey | null>(null);
   const [loading, setLoading] = useState(false);
   const [activeStep, setActiveStep] = useState<PipelineStep | null>("route");
   const [stepsDone, setStepsDone] = useState<PipelineStep[]>([]);
@@ -325,19 +330,42 @@ export default function App() {
         <div className="brand">
           <span className="mark">✦</span> Mileage
         </div>
-        <nav className="steps" aria-label="Progress">
-          {STEPS.map((s) => (
-            <span
-              key={s.key}
-              className={stepClass(s.key, activeStep, stepsDone)}
+        <div className="header-right">
+          <nav className="page-nav" aria-label="Pages">
+            <button
+              type="button"
+              className={`page-tab${view === "optimizer" ? " active" : ""}`}
+              onClick={() => setView("optimizer")}
             >
-              <span className="n">{s.n}</span>
-              {s.label}
-            </span>
-          ))}
-        </nav>
+              Optimizer
+            </button>
+            <button
+              type="button"
+              className={`page-tab${view === "scrape" ? " active" : ""}`}
+              onClick={() => setView("scrape")}
+            >
+              Live scrape
+            </button>
+          </nav>
+          {view === "optimizer" && (
+            <nav className="steps" aria-label="Progress">
+              {STEPS.map((s) => (
+                <span
+                  key={s.key}
+                  className={stepClass(s.key, activeStep, stepsDone)}
+                >
+                  <span className="n">{s.n}</span>
+                  {s.label}
+                </span>
+              ))}
+            </nav>
+          )}
+        </div>
       </header>
 
+      {view === "scrape" && <LiveScrapePage />}
+
+      {view === "optimizer" && (
       <main>
         <h1 className="wordmark">Mileage</h1>
         <p className="tagline">
@@ -406,9 +434,7 @@ export default function App() {
 
           <div className="demo-row">
             {(Object.keys(DEMOS) as DemoKey[]).map((key) => {
-              const selected =
-                selectedDemo === key ||
-                matchesDemo(key, origin, dest, cabin, miles);
+              const selected = selectedDemo === key;
               const enabled = isDemoEnabled(key);
               return (
                 <button
@@ -495,6 +521,7 @@ export default function App() {
           </>
         )}
       </main>
+      )}
     </>
   );
 }

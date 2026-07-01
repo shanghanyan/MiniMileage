@@ -15,6 +15,11 @@
 #   hub        program origin airport, IATA (required for html_table_destination)
 #   provides   chart  (L4 — no live seat -> no_live_space flag)
 #              award  (L3 — live seat -> seats_available set)
+#   role       primary  (the source we DEPEND ON for this program)
+#              fallback (a redundant backup: mirror, unparseable PDF, blog echo)
+#              -> the live-scrape scoreboard hard-fails only when a PRIMARY
+#                 breaks; a fallback failure is a WARN (a working primary covers
+#                 it). Defaults to primary when omitted.
 #   trust      [0,1] weight for rotation order + cross-check median
 #   updated_at ISO date the source data was last verified current
 #   layers     informational tags
@@ -25,12 +30,14 @@ targets:
 
   # Aeroplan official Air Canada PDF (distance-based, June 2026).
   # Requires pdfplumber for binary PDF extraction; gracefully returns []
-  # without it. The ATF HTML source below is the active fallback.
+  # without it. Tagged role:fallback — atf-aeroplan-chart (HTML) is the working
+  # primary; this high-trust PDF is a cross-check once a PDF parser can read it.
   - name: aeroplan-official-pdf
     url: https://www.aircanada.com/content/dam/aircanada/loyalty-content/documents/flight-rewards-chart-june2026-en.pdf
     format: pdf
     program: aeroplan
     provides: chart
+    role: fallback   # highest trust, but visually-laid-out PDF; ATF HTML is the working primary
     trust: 0.95
     updated_at: "2026-06-01"
     layers: [charts]
@@ -42,6 +49,7 @@ targets:
     format: html_table_wide
     program: aeroplan
     provides: chart
+    role: primary
     trust: 0.82
     updated_at: "2026-06-29"
     layers: [charts]
@@ -53,6 +61,7 @@ targets:
     format: html_table_wide
     program: lifemiles
     provides: chart
+    role: primary
     trust: 0.80
     updated_at: "2026-06-29"
     layers: [charts]
@@ -69,6 +78,7 @@ targets:
     program: turkish
     hub: IST
     provides: chart
+    role: primary
     trust: 0.80
     updated_at: "2026-06-29"
     layers: [charts]
@@ -81,6 +91,7 @@ targets:
     format: html_table_wide
     program: ana
     provides: chart
+    role: primary
     trust: 0.80
     updated_at: "2026-06-29"
     layers: [charts]
@@ -96,21 +107,26 @@ targets:
     program: krisflyer
     hub: SIN
     provides: chart
+    role: primary
     trust: 0.80
     updated_at: "2026-06-29"
     layers: [charts]
 
-  # KrisFlyer official one-way saver chart PDF (direct CDN, not WAF-protected).
+  # KrisFlyer official one-way Advantage/Saver chart PDF (direct CDN, not WAF-
+  # protected). URL confirmed live 2026-07-01 (Content-Type: application/pdf),
+  # effective 1 Nov 2025. Note: this is a ZONE x ZONE matrix (Zones 1-13), not a
+  # from/to/distance grid — the current wide-table PDF selector will not extract
+  # it. Kept as a confirmed cross-check source pending a zone-matrix PDF parser;
+  # KrisFlyer route data is served today by atf-krisflyer-chart (HTML).
   # Requires pdfplumber for binary extraction; gracefully returns [] without it.
-  # URL is the singaporeair.com dam pattern — confirm the exact filename with
-  # `mileage sources --validate-urls` before trusting (404 -> auto-marked DEAD).
   - name: krisflyer-official-pdf
-    url: https://www.singaporeair.com/content/dam/krisflyer/award-charts/SingaporeAirlines-OneWay-AdvantageSaver-AwardChart.pdf
+    url: https://www.singaporeair.com/content/dam/sia/web-assets/pdfs/ppsclub-krisflyer/krisflyer/progupdates/awardcharts/SingaporeAirlinesOne-WayAdvantageSaverAwardChartupdated1Nov25.pdf
     format: pdf
     program: krisflyer
     provides: chart
+    role: fallback   # confirmed live, but zone-matrix PDF the wide selector can't read; ATF guide is primary
     trust: 0.55
-    updated_at: "2026-06-29"
+    updated_at: "2026-07-01"
     layers: [charts]
 
   # 10xtravel blog fallbacks — single-program chart posts (wide cabin columns),
@@ -121,6 +137,7 @@ targets:
     format: html_table_wide
     program: turkish
     provides: chart
+    role: fallback
     trust: 0.55
     updated_at: "2026-06-29"
     layers: [charts]
@@ -130,6 +147,7 @@ targets:
     format: html_table_wide
     program: ana
     provides: chart
+    role: fallback
     trust: 0.55
     updated_at: "2026-06-29"
     layers: [charts]
@@ -142,6 +160,7 @@ targets:
     format: pdf
     program: lifemiles
     provides: chart
+    role: fallback
     trust: 0.40
     updated_at: "2022-06-01"
     layers: [charts]
@@ -164,6 +183,7 @@ targets:
     url: file://fixtures/starnet_award_space.json
     format: json
     provides: award
+    role: primary   # sole L3 live-award source (placeholder for the seats.aero call)
     trust: 0.30
     updated_at: "2026-06-24"
     layers: [award]
@@ -176,6 +196,7 @@ targets:
     url: file://fixtures/awardatlas_charts.html
     format: html_table
     provides: chart
+    role: fallback   # legacy offline fixture; real chart data comes from the ATF sources
     trust: 0.20
     updated_at: "2026-06-18"
     layers: [charts]
@@ -184,5 +205,6 @@ targets:
     url: file://fixtures/milefeed.rss
     format: rss
     provides: award
+    role: fallback   # offline RSS fixture; live award space flows through starnet-award-space
     trust: 0.15
     layers: [award]

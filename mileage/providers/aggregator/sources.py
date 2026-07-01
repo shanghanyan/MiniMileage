@@ -29,6 +29,14 @@ _VALID_FORMATS = {
     "pdf",
 }
 _VALID_PROVIDES = {"chart", "award"}
+# A target's ROLE for a program (§6). `primary` is the source we actually depend
+# on to serve that program; `fallback` is a redundant backup (a lower-trust
+# mirror, an unparseable official PDF, a blog echo). The live-scrape scoreboard
+# treats these differently: a PRIMARY failing means the program has no working
+# source (hard failure); a FALLBACK failing is only a WARN, because a working
+# primary already covers it. This is what stops a redundant fallback breaking
+# from looking identical to a primary source going down.
+_VALID_ROLES = {"primary", "fallback"}
 
 
 @dataclass
@@ -42,6 +50,7 @@ class Target:
     updated_at: Optional[str] = None
     program: Optional[str] = None  # loyalty program (required for html_table_wide + pdf)
     hub: Optional[str] = None      # program origin airport (required for html_table_destination)
+    role: str = "primary"          # primary | fallback (see _VALID_ROLES)
     # Health, mutated by validate():
     last_status: Optional[int] = None
     last_404: bool = False
@@ -104,6 +113,13 @@ def load_targets(sources_path: Path) -> list[Target]:
         if fmt not in _VALID_FORMATS or provides not in _VALID_PROVIDES:
             log.warning("skipping malformed target: %s", raw.get("name"))
             continue
+        role = str(raw.get("role", "primary")).strip().lower() or "primary"
+        if role not in _VALID_ROLES:
+            log.warning(
+                "target %s has invalid role %r; defaulting to 'primary'",
+                raw.get("name"), role,
+            )
+            role = "primary"
         targets.append(
             Target(
                 name=str(raw["name"]),
@@ -115,6 +131,7 @@ def load_targets(sources_path: Path) -> list[Target]:
                 updated_at=raw.get("updated_at"),
                 program=str(raw["program"]).strip().lower() if raw.get("program") else None,
                 hub=str(raw["hub"]).strip().upper() if raw.get("hub") else None,
+                role=role,
             )
         )
     # Highest trust first: rotation/cross-check both prefer trusted sources.

@@ -75,3 +75,37 @@ class FreshnessResponse(BaseModel):
     cache_ttl_days: float
     providers: list[FreshnessProvider]
     sources: list[FreshnessSource]
+
+
+class LiveScrapeTarget(BaseModel):
+    """One target's fetch -> parse -> resolve outcome (role-reclassified)."""
+
+    name: str
+    url: str
+    role: str                       # primary | fallback
+    format: str
+    provides: str                   # chart | award
+    trust: float
+    status: str                     # ok | warn | fail
+    detail: str
+    rows: int = 0
+    program: Optional[str] = None
+    resolved: Optional[str] = None  # probe route this source resolved, if any
+    reclassified: bool = False      # a fallback FAIL downgraded to WARN?
+    sample: list[dict] = Field(default_factory=list)
+
+
+class LiveScrapeProgram(BaseModel):
+    """Per-program roll-up: does this program have a working PRIMARY source?"""
+
+    program: str
+    has_working_primary: bool
+    primaries: list[dict] = Field(default_factory=list)
+    fallbacks: list[dict] = Field(default_factory=list)
+
+
+class LiveScrapeResponse(BaseModel):
+    offline: bool
+    targets: list[LiveScrapeTarget]
+    programs: list[LiveScrapeProgram]
+    summary: dict

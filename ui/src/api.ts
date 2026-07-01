@@ -1,4 +1,8 @@
-import type { RedemptionRequest, RunStatusResponse } from "./types";
+import type {
+  LiveScrapeResponse,
+  RedemptionRequest,
+  RunStatusResponse,
+} from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
@@ -98,6 +102,19 @@ export async function pollUntilComplete(
     }
     await new Promise((r) => setTimeout(r, intervalMs));
   }
+}
+
+export async function runLiveScrape(
+  offline = false,
+): Promise<LiveScrapeResponse> {
+  const res = await apiFetch(
+    `${API_BASE}/scrape/live?offline=${offline ? "true" : "false"}`,
+    { headers: { ...authHeaders() }, cache: "no-store" },
+  );
+  if (!res.ok) {
+    throw new Error(`Live scrape failed (${res.status})`);
+  }
+  return res.json();
 }
 
 export function parseMiles(raw: string): number {

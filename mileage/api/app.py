@@ -21,12 +21,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from .. import obs
 from ..config import Config, build_registry, build_repository, load_federation
 from ..domain.models import User
+from ..providers.aggregator.live_scrape import run_live_scrape
 from .auth import make_current_user_dependency
 from .orchestrator import RunOrchestrator, request_to_route, request_to_user
 from .schemas import (
     FreshnessProvider,
     FreshnessResponse,
     FreshnessSource,
+    LiveScrapeResponse,
     RedemptionRequest,
     RedemptionResponse,
     RunStatusResponse,
@@ -194,6 +196,28 @@ def upsert_user(
         balances=user.balances,
         preferences=user.preferences,
     )
+
+
+@app.get("/scrape/live", response_model=LiveScrapeResponse)
+def scrape_live(offline: bool = False) -> LiveScrapeResponse:
+    """Run the live scrape and return a role-aware per-target report (§6).
+
+    This is the manual "Live scrape" button behind the UI diagnostics page: it
+    walks every source in `sources.yaml` through the production fetch/parse/
+    resolve stack and reports, per target, what was scraped (row count + a small
+    sample) and — when it produced nothing — the specific reason (undecoded body
+    vs JS shell vs schema mismatch vs a dead URL), never a generic "parser miss".
+
+    Role-aware: a PRIMARY failing is a hard `fail` (its program lost coverage); a
+    FALLBACK failing is only a `warn` (a working primary already covers it), so
+    `summary.all_primaries_ok` is the single truthful green/red signal.
+
+    `offline=true` reads only `file://` fixtures (fast, deterministic — good for
+    a smoke check); the default `offline=false` performs a REAL network scrape
+    and can take tens of seconds.
+    """
+    report = run_live_scrape(offline=offline)
+    return LiveScrapeResponse(**report.to_dict())
 
 
 @app.get("/health")
