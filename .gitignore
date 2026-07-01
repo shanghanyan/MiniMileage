@@ -15,3 +15,12 @@ mileage/knowledge/discovered_charts.json
 
 # Env / secrets
 .env
+
+# Personal planning / discovery docs (Cursor agent briefs, architecture notes)
+Cursor-*.md
+Mileage-Architecture-Plan.md
+mileage-ui-mockup.html
+
+# Cursor agent skills (local dev tooling, not runtime)
+.agents/
+skills-lock.json
