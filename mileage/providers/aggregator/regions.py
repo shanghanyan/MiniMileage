@@ -56,6 +56,8 @@ _EXACT: dict[str, str] = {
     "us": "north_america",
     "u s": "north_america",
     "u s a": "north_america",
+    "us domestic": "north_america",      # LifeMiles within-US rows
+    "domestic us": "north_america",
     "canada": "north_america",
     "mexico": "north_america",
     "hawaii": "north_america",
@@ -101,6 +103,9 @@ _EXACT: dict[str, str] = {
     "south pacific": "oceania",
     "australia": "oceania",
     "new zealand": "oceania",
+    "nz": "oceania",
+    "australia nz": "oceania",           # LifeMiles "Australia / NZ" zone
+    "australia new zealand": "oceania",
     # South America
     "south america": "south_america",
     "southern south america": "south_america",
@@ -140,11 +145,25 @@ def canonicalize_region(label: str) -> Optional[str]:
     norm = _norm(label)
     if not norm:
         return None
+    hit = _lookup(norm)
+    if hit:
+        return hit
+    # Retry once after dropping a trailing/inline qualifier in parentheses or
+    # brackets — real charts tag a single region with a program zone code:
+    # "Hawaii (Zone 5)" -> "Hawaii", "Japan (Zone 1-A)" -> "Japan". Composite
+    # multi-region zones ("Asia 2, Russia 3 (Zone 4)") still fail _lookup after
+    # stripping, so they stay dropped + counted — never guessed (§A contract).
+    stripped = _norm(re.sub(r"[\(\[][^\)\]]*[\)\]]", " ", str(label)))
+    if stripped and stripped != norm:
+        return _lookup(stripped)
+    return None
+
+
+def _lookup(norm: str) -> Optional[str]:
+    """Exact map, then a safe multi-word containment match. Single short tokens
+    are NOT matched as substrings (so "us" never matches inside "australia")."""
     if norm in _EXACT:
         return _EXACT[norm]
-    # Fall back to a safe multi-word containment match (e.g. "flights to
-    # north america" -> north_america). Single short tokens are NOT matched as
-    # substrings (so "us" never matches inside "australia").
     for alias, token in _CONTAINS:
         if alias in norm:
             return token

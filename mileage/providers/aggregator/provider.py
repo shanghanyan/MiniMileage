@@ -37,6 +37,7 @@ from .parse import (
     parse_chart_html,
     parse_chart_html_wide,
     parse_chart_json,
+    parse_chart_pdf,
     parse_rss,
 )
 from .ingest import load_discovered_rows, load_stale_programs
@@ -95,8 +96,15 @@ class AggregatorProvider:
         self.targets: list[Target] = load_targets(self._sources_path)
         if health_repo is not None:
             apply_persisted_health(self.targets, health_repo)
+        # impersonate=True wires the curl_cffi (TLS/JA4) fallback for header/TLS
+        # blocks; it's a no-op when curl_cffi isn't installed (the Fetcher guards
+        # on _HAS_CURL_CFFI), so this is always safe. trust_env defaults to off
+        # inside the Fetcher, so a stray ALL_PROXY can't silently break fetches.
         self.fetcher = fetcher or Fetcher(
-            politeness=PolitenessPolicy(), base_dir=self._dir, offline=offline
+            politeness=PolitenessPolicy(),
+            base_dir=self._dir,
+            offline=offline,
+            impersonate=True,
         )
         # Intake (b): rows the discovery mode (§6.1 — email/blog/transcript)
         # extracted and persisted. Loaded here so discovered charts flow through
@@ -157,10 +165,10 @@ class AggregatorProvider:
         )
         return self.targets
 
-    def _content_rows(self, target: Target, text: str) -> int:
+    def _content_rows(self, target: Target, text: str, raw: Optional[bytes] = None) -> int:
         """Count canonicalizable rows a target's parser produces (§G deep check)."""
         if target.provides == "chart":
-            return len(self._parse_chart_rows(target, text))
+            return len(self._parse_chart_rows(target, text, raw=raw))
         if target.provides == "award":
             return len(self._parse_award_rows(target, text))
         return 0
@@ -253,7 +261,7 @@ class AggregatorProvider:
             result = self._read(target)
             if result is None:
                 continue
-            rows = self._parse_chart_rows(target, result.text)
+            rows = self._parse_chart_rows(target, result.text, raw=result.raw)
             chart_by_program = self._build_charts(rows)
             for program, chart in chart_by_program.items():
                 if wanted and program not in wanted:
@@ -353,7 +361,9 @@ class AggregatorProvider:
             )
         return out
 
-    def _parse_chart_rows(self, target: Target, text: str) -> list[RawChartRow]:
+    def _parse_chart_rows(
+        self, target: Target, text: str, *, raw: Optional[bytes] = None
+    ) -> list[RawChartRow]:
         if target.format == "html_table":
             return parse_chart_html(text, updated_at=target.updated_at)
         if target.format == "html_table_wide":
@@ -364,7 +374,12 @@ class AggregatorProvider:
         if target.format == "rss":
             charts, _ = parse_rss(text)
             return charts
-        return []  # pdf: requires pdfplumber binary extraction; degrades to empty without it
+        if target.format == "pdf":
+            # Binary table extraction via pdfplumber (raw bytes; the decoded
+            # `text` of a PDF is lossy). Degrades to [] without the optional dep.
+            prog = target.program or target.name
+            return parse_chart_pdf(raw, program=prog, updated_at=target.updated_at)
+        return []
 
     def _build_charts(self, rows: list[RawChartRow]) -> dict[str, dict]:
         """Group raw rows into per-program chart specs for lookup_award_miles."""

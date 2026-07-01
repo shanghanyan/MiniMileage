@@ -56,8 +56,13 @@ targets:
     updated_at: "2026-06-29"
     layers: [charts]
 
-  # Turkish Miles&Smiles: AwardTravelFinder HTML guide (same domain/parser as
-  # Aeroplan + LifeMiles above; server-rendered, no WAF). Unblocks Demo B.
+  # Turkish Miles&Smiles: AwardTravelFinder "guide" page. NOTE (audited 2026-06):
+  # this is a guide-format page (per-destination tables: destination | code |
+  # economy<tier> | business<tier> | first<tier>), NOT the from/to wide-chart
+  # schema. The wide parser finds no matching table -> 0 rows (selector_miss).
+  # There is no /award-charts/turkish equivalent (it 404s). Recovering this
+  # source needs a dedicated "destination-table" parser; until then the
+  # 10x-turkish-chart fallback + discovery intake cover Turkish.
   - name: atf-turkish-chart
     url: https://awardtravelfinder.com/turkish-miles-guides
     format: html_table_wide
@@ -79,7 +84,11 @@ targets:
     updated_at: "2026-06-29"
     layers: [charts]
 
-  # Singapore KrisFlyer: AwardTravelFinder HTML guide (server-rendered, no WAF).
+  # Singapore KrisFlyer: AwardTravelFinder "guide" page. NOTE (audited 2026-06):
+  # guide-format (destination | code | economy<saver/adv> | business | first),
+  # NOT the from/to wide-chart schema -> wide parser yields 0 rows. No
+  # /award-charts/krisflyer|singapore equivalent (both 404). Needs the same
+  # destination-table parser as the Turkish guide above to be usable.
   - name: atf-krisflyer-chart
     url: https://awardtravelfinder.com/singapore-krisflyer-guides
     format: html_table_wide

@@ -25,6 +25,18 @@ aggregator = [
     "curl_cffi>=0.7",
     "feedparser>=6.0",
     "pdfplumber>=0.11",
+    # Content-coding decoders. Many chart hosts (e.g. AwardTravelFinder) reply
+    # with `content-encoding: br`/`zstd`; without these httpx hands back the
+    # raw compressed bytes as `.text`, which looks like a 200 with no <table>.
+    # The Fetcher only advertises an encoding it can decode (see fetch.py:
+    # _accept_encoding), so absence degrades to gzip rather than silent garbage.
+    "brotli>=1.1",
+    "zstandard>=0.22",
+    # Only needed if you OPT IN to fetching through a SOCKS proxy
+    # (Fetcher(trust_env=True) / MILEAGE_TRUST_ENV=1). By default the Fetcher
+    # ignores ALL_PROXY, so the scraper never silently crashes on a missing
+    # socksio when a stray socks5h:// proxy is exported into the environment.
+    "socksio>=1.0",
 ]
 
 # Discovery intake (§6.1, aggregator mode b): blog + transcript readers. All

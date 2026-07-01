@@ -9,6 +9,7 @@ the knowledge dir, and runs the `--validate-urls` health check that records a
 
 from __future__ import annotations
 
+import inspect
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
@@ -127,6 +128,25 @@ def apply_persisted_health(
     return targets
 
 
+def _accepts_raw(fn: Callable) -> bool:
+    """True if `fn` can take a 3rd (raw bytes) positional arg.
+
+    Lets a content_check opt into the undecoded body (needed for PDF parsing)
+    while older `content_check(target, text)` callables keep working unchanged.
+    """
+    try:
+        params = list(inspect.signature(fn).parameters.values())
+    except (TypeError, ValueError):
+        return False
+    if any(p.kind == p.VAR_POSITIONAL for p in params):
+        return True
+    positional = [
+        p for p in params
+        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+    ]
+    return len(positional) >= 3
+
+
 def _needs_check(checked_at: Optional[str], max_age_days: int) -> bool:
     if not checked_at:
         return True
@@ -147,17 +167,19 @@ def validate_targets(
     force: bool = False,
     max_age_days: int = 30,
     deep: bool = False,
-    content_check: Optional[Callable[[Target, str], int]] = None,
+    content_check: Optional[Callable[..., int]] = None,
 ) -> list[Target]:
     """Probe each target; persist health (monthly URL-rot check, Phase 2/§G).
 
     `deep=True` adds CONTENT validation: after a 200, fetch the body and run the
-    target's structural parser via `content_check(target, text) -> row_count`.
+    target's structural parser via `content_check(target, text[, raw]) ->
+    row_count` (the optional 3rd arg is the undecoded body, for PDF targets).
     Zero rows on a live page is a `selector_miss` (the page loaded but stopped
     serving the expected table) — surfaced distinctly and fed into §F rot
     detection, instead of the old behavior that reported it as `ok`.
     """
     now = datetime.now(timezone.utc).isoformat()
+    pass_raw = content_check is not None and _accepts_raw(content_check)
     for t in targets:
         if health_repo and not force and not _needs_check(t.last_checked, max_age_days):
             log.info("skip validate %s: checked %s (< %d days)", t.name, t.last_checked, max_age_days)
@@ -184,7 +206,10 @@ def validate_targets(
             result = fetcher.get(t.url)
             if result is not None and result.ok:
                 try:
-                    rows = content_check(t, result.text)
+                    if pass_raw:
+                        rows = content_check(t, result.text, getattr(result, "raw", None))
+                    else:
+                        rows = content_check(t, result.text)
                 except Exception as exc:  # a parser bug must not crash validation
                     log.info("content_check error for %s: %s", t.name, exc)
                     rows = 0

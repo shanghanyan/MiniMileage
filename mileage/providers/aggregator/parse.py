@@ -34,6 +34,17 @@ from .regions import (
 
 log = logging.getLogger("mileage.aggregator.parse")
 
+# pdfplumber is an OPTIONAL accelerator (binary PDF table extraction). Absence
+# degrades gracefully: PDF targets parse to nothing instead of crashing, exactly
+# as before, and a one-line install (`pip install pdfplumber`) lights them up.
+try:  # pragma: no cover - exercised only when the extra is installed
+    import pdfplumber  # type: ignore
+
+    _HAS_PDFPLUMBER = True
+except Exception:  # pragma: no cover
+    pdfplumber = None  # type: ignore
+    _HAS_PDFPLUMBER = False
+
 _CABINS = {"economy", "premium_economy", "business", "first"}
 
 # Maps wide-table column headers to canonical cabin names.
@@ -295,14 +306,43 @@ def parse_chart_html_wide(
         log.info("html_wide: no wide award-chart table found on page")
         return []
 
-    header = [h.strip().lower() for h in table.header]
+    out, dropped = _emit_wide_rows(
+        table.header, table.rows, program=program, updated_at=updated_at
+    )
+    if out is None:  # no usable to/distance column
+        log.info("html_wide: no 'to'/'distance' column on the chart table")
+        return []
+    if stats is not None:
+        stats["dropped"] = stats.get("dropped", 0) + dropped
+    if dropped:
+        log.info("html_wide chart: dropped %d uncanonicalizable row(s)", dropped)
+    return out
+
+
+def _emit_wide_rows(
+    raw_header: list[str],
+    body_rows: list[list[str]],
+    *,
+    program: str,
+    updated_at: Optional[str],
+) -> tuple[Optional[list[RawChartRow]], int]:
+    """Turn one wide award-chart table (header + rows) into RawChartRows.
+
+    Shared by the HTML (`parse_chart_html_wide`) and PDF (`parse_chart_pdf`)
+    paths so both honor the SAME anti-hallucination contract: a cell only
+    becomes a datum when `from` + `to`/`distance` + a cabin column all hit, and
+    an uncanonicalizable zone is dropped + counted, never guessed (§A).
+
+    Returns `(rows, dropped)`, or `(None, 0)` when the table lacks a usable
+    `to`/`distance` column (signals the caller it was not a real chart table).
+    """
+    header = [h.strip().lower() for h in raw_header]
     idx = {name: i for i, name in enumerate(header)}
 
     # Accept 'to' (LifeMiles zone pairs) or 'distance' (Aeroplan distance bands)
     zone_col = next((c for c in ("to", "distance") if c in idx), None)
-    if zone_col is None:
-        log.info("html_wide: no 'to'/'distance' column on the chart table")
-        return []
+    if zone_col is None or "from" not in idx:
+        return None, 0
     is_distance = zone_col == "distance"
 
     # Collect cabin columns in header order
@@ -315,11 +355,11 @@ def parse_chart_html_wide(
     out: list[RawChartRow] = []
     prog = program.strip().lower()
     dropped = 0
-    for cells in table.rows:
+    for cells in body_rows:
         if len(cells) <= max(idx["from"], idx[zone_col]):
             continue
-        raw_a = cells[idx["from"]].strip()
-        raw_b = cells[idx[zone_col]].strip()
+        raw_a = (cells[idx["from"]] or "").strip()
+        raw_b = (cells[idx[zone_col]] or "").strip()
         if not raw_a or not raw_b:
             continue
 
@@ -347,7 +387,7 @@ def parse_chart_html_wide(
             col_i = idx[label]
             if col_i >= len(cells):
                 continue
-            miles = _wide_miles(cells[col_i])
+            miles = _wide_miles(cells[col_i] or "")
             if miles is None:
                 continue  # selector miss -> drop, never guess
             out.append(
@@ -363,10 +403,71 @@ def parse_chart_html_wide(
                     distance_max=dist_max,
                 )
             )
+    return out, dropped
+
+
+# --------------------------------------------------------------------------- #
+# PDF parser (official airline award-chart PDFs — e.g. Aeroplan, KrisFlyer)
+# --------------------------------------------------------------------------- #
+def parse_chart_pdf(
+    data: Optional[bytes],
+    *,
+    program: str,
+    updated_at: Optional[str] = None,
+    stats: Optional[dict] = None,
+) -> list[RawChartRow]:
+    """Extract wide award-chart rows from a PDF's tables (§6).
+
+    Uses `pdfplumber` to pull the laid-out tables out of an official chart PDF
+    (the highest-trust Aeroplan + KrisFlyer sources), then runs each table
+    through the SAME wide-chart row logic as the HTML path (`_emit_wide_rows`),
+    so geography canonicalization and the anti-hallucination contract are
+    identical regardless of input format.
+
+    Degrades gracefully: returns `[]` (never raises) when pdfplumber is not
+    installed or no chart-shaped table is found — the source simply produces no
+    data, exactly as before.
+    """
+    if not _HAS_PDFPLUMBER:
+        log.info("pdf chart: pdfplumber not installed; skipping (pip install pdfplumber)")
+        return []
+    if not data:
+        log.info("pdf chart: no bytes to parse")
+        return []
+
+    import io
+
+    tables: list[_ParsedTable] = []
+    try:
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            for page in pdf.pages:
+                for raw_table in page.extract_tables() or []:
+                    if not raw_table or len(raw_table) < 2:
+                        continue
+                    header = [str(c or "").strip().lower() for c in raw_table[0]]
+                    body = [
+                        [str(c or "").strip() for c in row]
+                        for row in raw_table[1:]
+                    ]
+                    tables.append(_ParsedTable(header=header, rows=body))
+    except Exception as exc:
+        log.info("pdf parse error: %s", exc)
+        return []
+
+    table = _select_wide_table(tables)
+    if table is None:
+        log.info("pdf chart: no wide award-chart table found in PDF")
+        return []
+
+    out, dropped = _emit_wide_rows(
+        table.header, table.rows, program=program, updated_at=updated_at
+    )
+    if out is None:
+        return []
     if stats is not None:
         stats["dropped"] = stats.get("dropped", 0) + dropped
     if dropped:
-        log.info("html_wide chart: dropped %d uncanonicalizable row(s)", dropped)
+        log.info("pdf chart: dropped %d uncanonicalizable row(s)", dropped)
     return out
 
 

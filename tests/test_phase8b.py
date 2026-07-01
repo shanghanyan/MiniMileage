@@ -34,7 +34,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mileage.config import Config
 from mileage.domain.charts import lookup_award_miles, great_circle_miles, _bands_match
 from mileage.domain.models import Cabin, Layer, Route
-from mileage.providers.aggregator.fetch import FetchResult
+from mileage.providers.aggregator import parse as agg_parse
+from mileage.providers.aggregator.fetch import FetchResult, Fetcher, _headers
+from mileage.providers.aggregator.parse import parse_chart_pdf
 from mileage.providers.aggregator.ingest import (
     Creator,
     detect_devaluation,
@@ -351,6 +353,130 @@ def test_extraction_eval_gate() -> None:
     report = evals.run_extraction_eval()
     assert report.ok, evals.render_extraction_report(report)
     assert report.dropped_regions >= 1
+
+
+# --------------------------------------------------------------------------- #
+# Live-scraping hardening: proxy hygiene, UA rotation, PDF extraction
+# --------------------------------------------------------------------------- #
+def test_fetcher_ignores_all_proxy_by_default() -> None:
+    """A stray ALL_PROXY must NOT be trusted by default (else every live fetch
+    routes through it and crashes before reaching the target). Opt back in
+    explicitly via the constructor or MILEAGE_TRUST_ENV."""
+    assert Fetcher().trust_env is False
+    assert Fetcher(trust_env=True).trust_env is True
+    os.environ["MILEAGE_TRUST_ENV"] = "1"
+    try:
+        assert Fetcher().trust_env is True
+    finally:
+        os.environ.pop("MILEAGE_TRUST_ENV", None)
+
+
+def test_user_agent_rotates_and_is_not_self_identifying() -> None:
+    seen = {_headers()["User-Agent"] for _ in range(50)}
+    assert len(seen) > 1, "User-Agent should rotate"
+    assert all("MileageAggregator" not in ua for ua in seen)
+    assert all("Mozilla/5.0" in ua for ua in seen)
+
+
+class _FakePdfPage:
+    def __init__(self, tables):
+        self._tables = tables
+
+    def extract_tables(self):
+        return self._tables
+
+
+class _FakePdf:
+    def __init__(self, pages):
+        self.pages = pages
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _install_fake_pdfplumber(tables):
+    """Patch the optional pdfplumber dep with a deterministic stand-in so the
+    PDF path is exercised offline, regardless of whether the binary is present.
+    Returns a restore() callable."""
+    class _FakePlumber:
+        @staticmethod
+        def open(_buf):
+            return _FakePdf([_FakePdfPage(tables)])
+
+    orig_mod, orig_flag = agg_parse.pdfplumber, agg_parse._HAS_PDFPLUMBER
+    agg_parse.pdfplumber = _FakePlumber
+    agg_parse._HAS_PDFPLUMBER = True
+
+    def restore():
+        agg_parse.pdfplumber = orig_mod
+        agg_parse._HAS_PDFPLUMBER = orig_flag
+
+    return restore
+
+
+def test_pdf_chart_parses_distance_bands() -> None:
+    tables = [[
+        ["From", "Distance", "Economy", "Business", "First"],
+        ["Within North America", "0-2,750 mi", "12,500", "25,000", "—"],
+        ["Between North America and Atlantic", "0-4,000 mi", "30,000", "60,000", "85,000"],
+        ["Between Narnia and Mordor", "0-4,000 mi", "1", "2", "3"],  # unmappable
+    ]]
+    restore = _install_fake_pdfplumber(tables)
+    try:
+        stats: dict = {}
+        rows = parse_chart_pdf(b"%PDF-1.4 fake", program="aeroplan", stats=stats)
+    finally:
+        restore()
+    # The unmappable Narnia/Mordor row is dropped AND counted, never guessed.
+    assert stats["dropped"] == 1
+    miles = {(r.region_a, r.region_b, r.cabin): r.miles for r in rows}
+    assert miles[("north_america", "north_america", "economy")] == 12500
+    assert miles[("north_america", "europe", "business")] == 60000
+    # The '—' first-class cell on the NA-NA row is a selector miss -> no row.
+    assert ("north_america", "north_america", "first") not in miles
+    assert all(r.distance_min is not None for r in rows)
+
+
+def test_pdf_chart_degrades_without_pdfplumber() -> None:
+    orig = agg_parse._HAS_PDFPLUMBER
+    agg_parse._HAS_PDFPLUMBER = False
+    try:
+        assert parse_chart_pdf(b"anything", program="aeroplan") == []
+    finally:
+        agg_parse._HAS_PDFPLUMBER = orig
+
+
+def test_pdf_target_flows_through_provider() -> None:
+    """A `format: pdf` chart target produces route quotes via the provider,
+    using the raw bytes the Fetcher now carries on FetchResult."""
+    tables = [[
+        ["From", "To", "Economy", "Business"],
+        ["North America", "Europe", "30,000", "63,000"],
+    ]]
+    restore = _install_fake_pdfplumber(tables)
+    try:
+        agg = AggregatorProvider(knowledge_dir=_KNOWLEDGE, offline=True)
+        target = Target(
+            name="aeroplan-official-pdf", url="https://example/chart.pdf",
+            format="pdf", provides="chart", program="lifemiles", trust=0.95,
+        )
+        result = FetchResult(
+            url=target.url, text="(binary)", status=200,
+            final_url=target.url, via="httpx", raw=b"%PDF-1.4 fake",
+        )
+        rows = agg._parse_chart_rows(target, result.text, raw=result.raw)
+        assert rows, "pdf target parsed no rows"
+        chart = agg._build_charts(rows).get("lifemiles")
+        hit = lookup_award_miles(
+            "lifemiles", chart, Route("LAX", "IST", Cabin.BUSINESS),
+            agg._region_map, airport_coords=agg._airport_coords,
+        )
+        assert hit is not None and hit.miles == 63000
+    finally:
+        restore()
 
 
 def _run_all() -> int:
