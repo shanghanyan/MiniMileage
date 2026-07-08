@@ -97,9 +97,78 @@ export interface ScrapeSummary {
   fallback_warn: number;
 }
 
+export interface LiveScrapeDiscoveryResult {
+  row_count: number;
+  email_docs: number;
+  blog_new: number;
+  transcript_new: number;
+  email_links_followed: number;
+  by_intake: Record<string, number>;
+  stale_programs: string[];
+  used_fixtures: boolean;
+  detail: string;
+}
+
+export interface DailyScrapeResponse {
+  found: boolean;
+  storage?: string | null;
+  storage_backend?: string | null;
+  completed_at?: string | null;
+  stored_at?: string | null;
+  discovery?: LiveScrapeDiscoveryResult | null;
+  scrape?: {
+    summary?: ScrapeSummary;
+  } | null;
+}
+
 export interface LiveScrapeResponse {
   offline: boolean;
   targets: ScrapeTarget[];
   programs: ScrapeProgram[];
   summary: ScrapeSummary;
+  discovery?: LiveScrapeDiscoveryResult | null;
+}
+
+export interface DiscoveryChannel {
+  kind: "email" | "blog" | "youtube";
+  name: string;
+  url?: string | null;
+  trust: number;
+  ready: boolean;
+  command: string;
+  detail: string;
+}
+
+export interface ProviderPath {
+  name: string;
+  health: string;
+  trust: number;
+  layers: string[];
+  disabled: boolean;
+  monthly_limit?: number | null;
+  config_hint?: string | null;
+  note?: string | null;
+}
+
+export interface DiscoveredChartsMeta {
+  updated_at?: string | null;
+  row_count: number;
+  by_intake: Record<string, number>;
+  stale_programs: string[];
+}
+
+export interface ScrapeInventorySummary {
+  chart_targets: number;
+  discovery_channels: number;
+  discovery_ready: number;
+  providers: number;
+  providers_healthy: number;
+  discovered_rows: number;
+}
+
+export interface ScrapeInventoryResponse {
+  discovery: DiscoveryChannel[];
+  providers: ProviderPath[];
+  discovered: DiscoveredChartsMeta;
+  summary: ScrapeInventorySummary;
 }

@@ -10,7 +10,8 @@
 # Target schema:
 #   name       unique source id (becomes provenance source_name)
 #   url        file:// (relative to this dir) or http(s)://
-#   format     html_table | html_table_wide | html_table_destination | json | rss | pdf
+#   format     html_table | html_table_wide | html_table_destination |
+#              html_table_zone_matrix | html_table_seasonal_zones | json | rss | pdf
 #   program    loyalty program this source covers (required for html_table_wide + pdf + destination)
 #   hub        program origin airport, IATA (required for html_table_destination)
 #   provides   chart  (L4 — no live seat -> no_live_space flag)
@@ -129,27 +130,38 @@ targets:
     updated_at: "2026-07-01"
     layers: [charts]
 
-  # 10xtravel blog fallbacks — single-program chart posts (wide cabin columns),
-  # server-rendered, no WAF. Lower trust: blog mirrors, used only when the ATF
-  # pages above are unavailable. Prose-heavy posts are the discovery agent's job.
+  # 10xtravel blog fallbacks — single-program chart posts, server-rendered, no
+  # WAF. Lower trust: blog mirrors, used only when the ATF pages above are
+  # unavailable. Prose-heavy posts are the discovery agent's job.
+  #
+  # Both pages were redesigned (confirmed live 2026-07-06) away from the old
+  # from/to/cabin wide table `html_table_wide` expects:
+  #   - Turkish is now a region-NUMBER zone x zone matrix, one table per cabin
+  #     (cabin named in a preceding heading) -> html_table_zone_matrix.
+  #   - ANA is now a zone legend + many small round-trip season x cabin tables,
+  #     one per zone pair (pair named in a preceding caption) ->
+  #     html_table_seasonal_zones. Scope note: that parser only emits the
+  #     ANA-OPERATED international zone-pair tables (the bulk of the page);
+  #     the domestic distance-band tables and partner-operated departure
+  #     tables use two further shapes, intentionally left for a follow-up.
   - name: 10x-turkish-chart
     url: https://10xtravel.com/turkish-airlines-award-charts/
-    format: html_table_wide
+    format: html_table_zone_matrix
     program: turkish
     provides: chart
     role: fallback
     trust: 0.55
-    updated_at: "2026-06-29"
+    updated_at: "2026-07-06"
     layers: [charts]
 
   - name: 10x-ana-chart
     url: https://10xtravel.com/ana-mileage-club-award-charts/
-    format: html_table_wide
+    format: html_table_seasonal_zones
     program: ana
     provides: chart
     role: fallback
     trust: 0.55
-    updated_at: "2026-06-29"
+    updated_at: "2026-07-06"
     layers: [charts]
 
   # LifeMiles third-party PDF (thriftytraveler.com, zone matrix, 2022).

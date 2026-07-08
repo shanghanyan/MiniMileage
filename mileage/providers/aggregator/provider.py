@@ -36,7 +36,9 @@ from .parse import (
     parse_award_json,
     parse_chart_destination_table,
     parse_chart_html,
+    parse_chart_html_seasonal_zones,
     parse_chart_html_wide,
+    parse_chart_html_zone_matrix,
     parse_chart_json,
     parse_chart_pdf,
     parse_rss,
@@ -93,6 +95,7 @@ class AggregatorProvider:
         self.enabled = enabled
         self._health_repo = health_repo
         self._region_map = self._load_region_map()
+        self._program_zones = self._load_program_zones()
         self._airport_coords = self._load_airport_coords()
         self.targets: list[Target] = load_targets(self._sources_path)
         if health_repo is not None:
@@ -194,6 +197,20 @@ class AggregatorProvider:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         return {k.upper(): v for k, v in (data.get("region_map") or {}).items()}
 
+    def _load_program_zones(self) -> dict[str, dict[str, int]]:
+        path = self._dir / "charts.yaml"
+        if not path.exists():
+            return {}
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        out: dict[str, dict[str, int]] = {}
+        for program, mapping in (data.get("program_zones") or {}).items():
+            if not isinstance(mapping, dict):
+                continue
+            out[str(program).lower()] = {
+                str(ap).upper(): int(z) for ap, z in mapping.items()
+            }
+        return out
+
     def _load_airport_coords(self) -> dict[str, tuple[float, float]]:
         """Airport [lat, lon] for the distance-band resolver (§A.4)."""
         path = self._dir / "charts.yaml"
@@ -270,6 +287,7 @@ class AggregatorProvider:
                 hit = lookup_award_miles(
                     program, chart, route, self._region_map,
                     airport_coords=self._airport_coords,
+                    program_zones=self._program_zones,
                 )
                 if hit is None:
                     continue
@@ -333,6 +351,7 @@ class AggregatorProvider:
             hit = lookup_award_miles(
                 program, chart, route, self._region_map,
                 airport_coords=self._airport_coords,
+                program_zones=self._program_zones,
             )
             if hit is None:
                 continue
@@ -376,6 +395,21 @@ class AggregatorProvider:
             prog = target.program or target.name
             return parse_chart_destination_table(
                 text, program=prog, hub=target.hub or "", updated_at=target.updated_at
+            )
+        if target.format == "html_table_zone_matrix":
+            # Region-NUMBER zone x zone grid, one table per cabin (10xtravel
+            # Turkish page, post-redesign — § live-scrape debugging 2026-07-06).
+            prog = target.program or target.name
+            return parse_chart_html_zone_matrix(
+                text, program=prog, updated_at=target.updated_at
+            )
+        if target.format == "html_table_seasonal_zones":
+            # Zone legend + many small round-trip season x cabin tables, one
+            # per zone pair (10xtravel ANA page — § live-scrape debugging
+            # 2026-07-06).
+            prog = target.program or target.name
+            return parse_chart_html_seasonal_zones(
+                text, program=prog, updated_at=target.updated_at
             )
         if target.format == "json":
             return parse_chart_json(text)

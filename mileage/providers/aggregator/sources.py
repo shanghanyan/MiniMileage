@@ -24,6 +24,8 @@ _VALID_FORMATS = {
     "html_table",
     "html_table_wide",
     "html_table_destination",
+    "html_table_zone_matrix",
+    "html_table_seasonal_zones",
     "json",
     "rss",
     "pdf",
@@ -43,7 +45,8 @@ _VALID_ROLES = {"primary", "fallback"}
 class Target:
     name: str
     url: str
-    format: str            # html_table | html_table_wide | json | rss | pdf
+    format: str            # html_table | html_table_wide | html_table_zone_matrix |
+                           # html_table_seasonal_zones | json | rss | pdf
     provides: str          # chart | award
     trust: float = 0.5
     layers: list[str] = field(default_factory=list)

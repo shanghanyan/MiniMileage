@@ -729,16 +729,72 @@ main {
 }
 
 .scrape-programs,
-.scrape-targets {
+.scrape-targets,
+.scrape-inventory,
+.scrape-chart-run {
   margin-top: 32px;
 }
 
+.scrape-inventory h2,
+.scrape-chart-run h2,
 .scrape-programs h2,
 .scrape-targets h2 {
   font-family: "Fraunces", serif;
   font-weight: 500;
   font-size: 20px;
   margin: 0 0 14px;
+}
+
+.scrape-subhead {
+  font-family: "Fraunces", serif;
+  font-weight: 500;
+  font-size: 17px;
+  margin: 22px 0 10px;
+}
+
+.scrape-kind-head {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--sub);
+  margin: 18px 0 8px;
+}
+
+.scrape-section-lede {
+  color: var(--sub);
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0 0 12px;
+  max-width: 68ch;
+}
+
+.scrape-section-lede code,
+.scrape-detail.muted code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--ground-soft);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.scrape-detail.muted {
+  color: var(--sub);
+  font-size: 12px;
+}
+
+.scrape-discovered-meta {
+  font-size: 13px;
+  color: var(--sub);
+  padding: 10px 12px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  margin-bottom: 14px;
+  line-height: 1.45;
+}
+
+.scrape-target.inventory {
+  padding: 12px 14px;
 }
 
 .program-row {

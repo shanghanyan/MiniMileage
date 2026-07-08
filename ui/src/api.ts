@@ -1,7 +1,9 @@
 import type {
+  DailyScrapeResponse,
   LiveScrapeResponse,
   RedemptionRequest,
   RunStatusResponse,
+  ScrapeInventoryResponse,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
@@ -102,6 +104,28 @@ export async function pollUntilComplete(
     }
     await new Promise((r) => setTimeout(r, intervalMs));
   }
+}
+
+export async function getScrapeInventory(): Promise<ScrapeInventoryResponse> {
+  const res = await apiFetch(`${API_BASE}/scrape/inventory`, {
+    headers: { ...authHeaders() },
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new Error(`Scrape inventory failed (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function getDailyScrape(): Promise<DailyScrapeResponse> {
+  const res = await apiFetch(`${API_BASE}/scrape/daily`, {
+    headers: { ...authHeaders() },
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new Error(`Daily scrape fetch failed (${res.status})`);
+  }
+  return res.json();
 }
 
 export async function runLiveScrape(

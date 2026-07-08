@@ -43,6 +43,15 @@ DEFAULT_PROBES: list[Route] = [
     Route("SIN", "JFK", Cabin.BUSINESS),  # KrisFlyer hub-based guide (SIN origin)
 ]
 
+# Format-specific probes — some fallback parsers cover zone pairs the default
+# demo routes never touch (10x ANA seasonal tables are Japan↔Korea, not LAX↔IST).
+_FORMAT_PROBES: dict[str, list[Route]] = {
+    "html_table_seasonal_zones": [
+        Route("NRT", "ICN", Cabin.BUSINESS),
+        Route("NRT", "ICN", Cabin.ECONOMY),
+    ],
+}
+
 # Programs held to the strict bar: a chart that parses but resolves NEITHER probe
 # is a failure for these. Others only warn — their hubs legitimately may not
 # cover these exact city pairs.
@@ -129,7 +138,10 @@ def diagnose_zero_rows(target: Target, result: Any) -> str:
     n = len(result.text)
     prefix = f"0 rows (fmt={fmt}, via={via}, bytes={n}"
 
-    if fmt in ("html_table", "html_table_wide", "html_table_destination"):
+    if fmt in (
+        "html_table", "html_table_wide", "html_table_destination",
+        "html_table_zone_matrix", "html_table_seasonal_zones",
+    ):
         tables = result.text.lower().count("<table")
         if _looks_undecoded(result.text):
             return (
@@ -149,6 +161,21 @@ def diagnose_zero_rows(target: Target, result: Any) -> str:
                 "guide table (header/tier-label drift on the live page, or all rows "
                 "dropped on an unmappable IATA code). Check the hub + table headers."
             )
+        if fmt == "html_table_zone_matrix":
+            return (
+                f"{prefix}, tables={tables}) — body has {tables} table(s) but none "
+                "resolved to a cabin-attributable zone x zone matrix (no clean "
+                "'<Cabin> Class' heading directly before a numeric zone matrix — "
+                "heading wording drift, or the matrix shape itself changed)."
+            )
+        if fmt == "html_table_seasonal_zones":
+            return (
+                f"{prefix}, tables={tables}) — body has {tables} table(s) but either "
+                "no 'Zone name | Zone number' legend was found, or no "
+                "'season | <cabin> class' table resolved against a 'Routes between "
+                "X (Zone N) and Y (Zone M)' caption (caption wording drift, or an "
+                "unmapped zone name in the legend)."
+            )
         return (
             f"{prefix}, tables={tables}) — body has {tables} table(s) but none "
             "match the from/to/distance + cabin wide schema (schema mismatch — "
@@ -157,9 +184,10 @@ def diagnose_zero_rows(target: Target, result: Any) -> str:
 
     if fmt == "pdf":
         return (
-            f"{prefix}) — pdfplumber extracted no from/distance/cabin table grid "
-            "(or pdfplumber isn't installed). Official PDFs are visually laid out "
-            "(merged cells / multi-row headers); needs a PDF-specific parser."
+            f"{prefix}) — pdfplumber extracted no parseable chart table "
+            "(tried wide from/to/distance grid and zone×zone matrix; "
+            "or pdfplumber isn't installed). Merged-cell / multi-row PDF "
+            "layouts may need a tighter selector."
         )
 
     return f"{prefix}) — parser produced no rows for this format."
@@ -168,6 +196,22 @@ def diagnose_zero_rows(target: Target, result: Any) -> str:
 # --------------------------------------------------------------------------- #
 # Per-target check (RAW status, before role reclassification).
 # --------------------------------------------------------------------------- #
+def _probes_for_target(target: Target, base: list[Route]) -> list[Route]:
+    """Merge default probes with any format-specific routes for this target."""
+    extra = _FORMAT_PROBES.get(target.format, [])
+    if not extra:
+        return base
+    seen: set[tuple[str, str, str]] = set()
+    merged: list[Route] = []
+    for route in [*extra, *base]:
+        key = (route.origin, route.dest, route.cabin.value)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(route)
+    return merged
+
+
 def _resolve_detail(agg: AggregatorProvider, rows: list, probes: list[Route]) -> Optional[str]:
     """First probe route that resolves against the parsed rows, or None."""
     chart_by_program = agg._build_charts(rows)
@@ -176,6 +220,7 @@ def _resolve_detail(agg: AggregatorProvider, rows: list, probes: list[Route]) ->
             hit = lookup_award_miles(
                 program, chart, route, agg._region_map,
                 airport_coords=agg._airport_coords,
+                program_zones=agg._program_zones,
             )
             if hit is not None:
                 cab = _CABIN_ABBR.get(route.cabin.value, route.cabin.value)
@@ -248,7 +293,7 @@ def check_target(
         base.detail = f"{len(rows)} rows"
         return base
 
-    resolved = _resolve_detail(agg, rows, probes)
+    resolved = _resolve_detail(agg, rows, _probes_for_target(target, probes))
     if resolved is None:
         base.detail = (
             "rows parsed but 0 resolved to a probe route — likely a region/hub "
@@ -378,3 +423,123 @@ def _roll_up_programs(
         else:
             ph.fallbacks.append(entry)
     return [buckets[name] for name in order]
+
+
+@dataclass
+class DiscoveryScrapeResult:
+    """Outcome of a discovery intake sweep (email + blogs + YouTube)."""
+
+    row_count: int = 0
+    email_docs: int = 0
+    blog_new: int = 0
+    transcript_new: int = 0
+    email_links_followed: int = 0
+    by_intake: dict = field(default_factory=dict)
+    stale_programs: list = field(default_factory=list)
+    used_fixtures: bool = False
+    detail: str = ""
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def run_discovery_intake(
+    *,
+    config: Optional[Any] = None,
+    offline: bool = False,
+    repo: Any = None,
+    cache: Any = None,
+    lock: Any = None,
+    limit: int = 10,
+) -> DiscoveryScrapeResult:
+    """Run email + blog + YouTube discovery and persist ``discovered_charts.json``.
+
+    Called from ``GET /scrape/live`` and ``mileage scrape-daily``. When ``cache``
+    is provided (Redis Cloud via ``build_stores``), blog/YouTube de-dupe keys
+    survive across runs so only *new* posts/videos are processed.
+
+    Offline mode uses ``.eml`` fixtures for email; blogs/transcripts still fetch
+    when not offline.
+    """
+    from dataclasses import replace
+
+    from ...config import Config
+    from .ingest import discovered_path, run_all_intakes, write_discovered
+    from .ingest.devaluation import mark_devaluations_stale
+
+    cfg = replace(config or Config.from_env(), offline=offline)
+    try:
+        result = run_all_intakes(
+            cfg, repo=repo, cache=cache, lock=lock, limit=limit,
+        )
+    except Exception as exc:
+        return DiscoveryScrapeResult(
+            detail=f"discovery failed: {type(exc).__name__}: {exc}"
+        )
+
+    path = discovered_path(cfg.knowledge_dir)
+    write_discovered(path, result.rows, result.stale_programs)
+    if repo is not None and result.stale_programs:
+        mark_devaluations_stale(repo, result.stale_programs, reason="live_scrape")
+
+    source = "fixtures" if result.used_fixtures else "live (IMAP + RSS + YouTube)"
+    return DiscoveryScrapeResult(
+        row_count=len(result.rows),
+        email_docs=result.email_docs,
+        blog_new=result.blog_new,
+        transcript_new=result.transcript_new,
+        email_links_followed=result.email_links_followed,
+        by_intake=result.by_intake,
+        stale_programs=sorted(result.stale_programs),
+        used_fixtures=result.used_fixtures,
+        detail=f"{len(result.rows)} rows from {source}",
+    )
+
+
+def run_daily_scrape(
+    *,
+    config: Optional[Any] = None,
+    repo: Any = None,
+    limit: int = 10,
+) -> dict:
+    """Full daily scrape: discovery intake + chart live scrape, persisted to Redis/file.
+
+    Intended for cron (``mileage scrape-daily``) — exits when done; no daemon.
+    """
+    from datetime import datetime, timezone
+
+    from ...config import Config, build_repository, build_stores
+    from .scrape_store import save_daily_snapshot
+
+    cfg = config or Config.from_env()
+    own_repo = repo is None
+    repo = repo or build_repository(cfg)
+    stores = build_stores(cfg, repo)
+    try:
+        discovery = run_discovery_intake(
+            config=cfg,
+            offline=False,
+            repo=repo,
+            cache=stores.cache,
+            lock=stores.lock,
+            limit=limit,
+        )
+        report = run_live_scrape(offline=False, knowledge_dir=cfg.knowledge_dir)
+        completed_at = datetime.now(timezone.utc).isoformat()
+        payload = {
+            "completed_at": completed_at,
+            "storage_backend": stores.backend,
+            "discovery": discovery.to_dict(),
+            "scrape": report.to_dict(),
+        }
+        payload["storage"] = save_daily_snapshot(
+            payload,
+            knowledge_dir=cfg.knowledge_dir,
+            cache=stores.cache,
+            backend=stores.backend,
+        )
+        return payload
+    finally:
+        stores.close()
+        if own_repo:
+            repo.close()

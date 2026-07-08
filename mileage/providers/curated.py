@@ -113,7 +113,10 @@ class CuratedProvider:
         for program, spec in programs.items():
             if q.programs and program not in q.programs:
                 continue
-            hit = lookup_award_miles(program, spec, q.route, region_map)
+            hit = lookup_award_miles(
+                program, spec, q.route, region_map,
+                program_zones=self._charts.get("program_zones"),
+            )
             if hit is None:
                 continue
             trust = float(spec.get("trust", 0.6))

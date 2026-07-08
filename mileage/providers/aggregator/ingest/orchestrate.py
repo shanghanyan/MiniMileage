@@ -40,6 +40,7 @@ class DiscoverResult:
     email_docs: int = 0
     blog_new: int = 0
     transcript_new: int = 0
+    email_links_followed: int = 0
     used_fixtures: bool = False
     marked_stale: set = field(default_factory=set)
 
@@ -89,12 +90,24 @@ def run_all_intakes(
     with obs.span("discover", obs.KIND_CHAIN, input_value="email+blogs+transcripts") as chain:
         # 1) Email (IMAP or .eml fixtures).
         with obs.span("discover:email", obs.KIND_CHAIN) as s:
-            email = run_email_discovery(config, fixture_dir=fixture_dir, limit=limit)
+            email = run_email_discovery(
+                config,
+                fetcher=fetcher,
+                cache=cache,
+                caption_fetcher=caption_fetcher,
+                fixture_dir=fixture_dir,
+                limit=limit,
+            )
             result.rows.extend(email.rows)
             result.stale_programs |= set(email.stale_programs)
             result.email_docs = len(email.documents)
+            result.email_links_followed = email.email_links_followed
             result.used_fixtures = email.used_fixtures
-            obs.set_output(s, f"{len(email.rows)} rows from {result.email_docs} emails")
+            obs.set_output(
+                s,
+                f"{len(email.rows)} rows from {result.email_docs} emails "
+                f"({email.email_links_followed} linked)",
+            )
 
         # 2) Blogs + 3) transcripts — concurrent off the jobs queue when present.
         def _blogs() -> None:

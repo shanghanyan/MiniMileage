@@ -26,7 +26,7 @@ const STEPS: { key: PipelineStep; label: string; n: number }[] = [
 ];
 
 type DemoKey = "A" | "B";
-type View = "optimizer" | "scrape";
+type View = "optimizer" | "debug";
 
 const DEMOS: Record<
   DemoKey,
@@ -341,10 +341,10 @@ export default function App() {
             </button>
             <button
               type="button"
-              className={`page-tab${view === "scrape" ? " active" : ""}`}
-              onClick={() => setView("scrape")}
+              className={`page-tab${view === "debug" ? " active" : ""}`}
+              onClick={() => setView("debug")}
             >
-              Live scrape
+              Debug UI
             </button>
           </nav>
           {view === "optimizer" && (
@@ -363,7 +363,7 @@ export default function App() {
         </div>
       </header>
 
-      {view === "scrape" && <LiveScrapePage />}
+      {view === "debug" && <LiveScrapePage />}
 
       {view === "optimizer" && (
       <main>

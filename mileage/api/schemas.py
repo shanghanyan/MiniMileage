@@ -104,8 +104,68 @@ class LiveScrapeProgram(BaseModel):
     fallbacks: list[dict] = Field(default_factory=list)
 
 
+class LiveScrapeDiscoveryResult(BaseModel):
+    row_count: int = 0
+    email_docs: int = 0
+    blog_new: int = 0
+    transcript_new: int = 0
+    email_links_followed: int = 0
+    by_intake: dict[str, int] = Field(default_factory=dict)
+    stale_programs: list[str] = Field(default_factory=list)
+    used_fixtures: bool = False
+    detail: str = ""
+
+
 class LiveScrapeResponse(BaseModel):
     offline: bool
     targets: list[LiveScrapeTarget]
     programs: list[LiveScrapeProgram]
+    summary: dict
+    discovery: Optional[LiveScrapeDiscoveryResult] = None
+
+
+class DailyScrapeResponse(BaseModel):
+    """Last persisted daily scrape snapshot (Redis Cloud or local file fallback)."""
+
+    found: bool
+    storage: Optional[str] = None
+    storage_backend: Optional[str] = None
+    completed_at: Optional[str] = None
+    stored_at: Optional[str] = None
+    discovery: Optional[LiveScrapeDiscoveryResult] = None
+    scrape: Optional[dict] = None
+
+
+class ScrapeDiscoveryChannel(BaseModel):
+    kind: str
+    name: str
+    url: Optional[str] = None
+    trust: float
+    ready: bool
+    command: str
+    detail: str
+
+
+class ScrapeProviderPath(BaseModel):
+    name: str
+    health: str
+    trust: float
+    layers: list[str]
+    disabled: bool
+    monthly_limit: Optional[int] = None
+    config_hint: Optional[str] = None
+    note: Optional[str] = None
+
+
+class ScrapeDiscoveredMeta(BaseModel):
+    updated_at: Optional[str] = None
+    row_count: int = 0
+    by_intake: dict[str, int] = Field(default_factory=dict)
+    stale_programs: list[str] = Field(default_factory=list)
+
+
+class ScrapeInventoryResponse(BaseModel):
+    discovery: list[ScrapeDiscoveryChannel]
+    providers: list[ScrapeProviderPath]
+    discovered: ScrapeDiscoveredMeta
     summary: dict

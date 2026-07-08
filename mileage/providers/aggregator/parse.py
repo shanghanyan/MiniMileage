@@ -136,10 +136,23 @@ def _to_bool(value) -> bool:
 class _ParsedTable:
     header: list[str]
     rows: list[list[str]]
+    # ALL plain text of the page between the END of the previous table and the
+    # START of this one (headings, captions, intro paragraphs — everything,
+    # tags stripped, whitespace-collapsed). Used by parsers that need a caption
+    # OUTSIDE the table to know what it means: a "Routes between X and Y" <p>
+    # caption (10xtravel ANA seasonal zone-pair tables).
+    preceding_text: str = ""
+    # ONLY the text of the single most recent heading tag (h1-h6) seen before
+    # this table — NOT accumulated with surrounding paragraphs, so an exact
+    # match like "Economy Class" isn't buried inside "...Economy Class The
+    # following award chart applies...". Used by 10xtravel's Turkish zone
+    # matrix, where the cabin name IS a clean heading immediately above the
+    # table (see `_strict_cabin_heading`).
+    preceding_heading: str = ""
 
 
 class _ChartTableParser(HTMLParser):
-    """Collect EVERY <table> on the page as (header, rows).
+    """Collect EVERY <table> on the page as (header, rows, preceding text).
 
     Real pages (e.g. awardtravelfinder.com) carry many tables — navigation,
     FAQ, the chart — so we cannot assume the chart is the first one. The parse
@@ -150,6 +163,11 @@ class _ChartTableParser(HTMLParser):
     `.header`/`.rows` expose the FIRST table for backward compatibility.
     """
 
+    # Tags whose text content must NOT leak into `preceding_text` (script/style
+    # bodies are not prose and would just be noise for the context regexes).
+    _SKIP_TEXT_TAGS = {"script", "style"}
+    _HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+
     def __init__(self) -> None:
         super().__init__()
         self._depth = 0          # nesting depth of open <table>s
@@ -158,7 +176,18 @@ class _ChartTableParser(HTMLParser):
         self._cell: list[str] = []
         self._cur_header: list[str] = []
         self._cur_rows: list[list[str]] = []
+        self._cur_pretext = ""
+        self._cur_preheading = ""
         self.tables: list[_ParsedTable] = []
+        # Text seen at depth 0 since the last table closed (candidate context
+        # for the NEXT table); reset once consumed at that table's open tag.
+        self._pending_text: list[str] = []
+        self._skip_text_depth = 0  # >0 while inside a script/style tag
+        # The most recently CLOSED heading tag's own text (persists until the
+        # next heading overwrites it), and whether we're inside one now.
+        self._last_heading = ""
+        self._in_heading = False
+        self._pending_heading: list[str] = []
 
     def handle_starttag(self, tag, attrs):
         if tag == "table":
@@ -166,10 +195,20 @@ class _ChartTableParser(HTMLParser):
                 self._cur_header = []
                 self._cur_rows = []
                 self._row = []
+                self._cur_pretext = re.sub(
+                    r"\s+", " ", " ".join(self._pending_text)
+                ).strip()
+                self._cur_preheading = self._last_heading
+                self._pending_text = []
             self._depth += 1
         elif self._depth and tag in ("td", "th"):
             self._in_cell = True
             self._cell = []
+        elif self._depth == 0 and tag in self._SKIP_TEXT_TAGS:
+            self._skip_text_depth += 1
+        elif self._depth == 0 and tag in self._HEADING_TAGS:
+            self._in_heading = True
+            self._pending_heading = []
 
     def handle_endtag(self, tag):
         if tag == "table" and self._depth:
@@ -178,13 +217,24 @@ class _ChartTableParser(HTMLParser):
                 if self._row:  # flush a final unterminated row
                     self._flush_row()
                 self.tables.append(
-                    _ParsedTable(header=self._cur_header, rows=self._cur_rows)
+                    _ParsedTable(
+                        header=self._cur_header, rows=self._cur_rows,
+                        preceding_text=self._cur_pretext,
+                        preceding_heading=self._cur_preheading,
+                    )
                 )
         elif self._depth and tag in ("td", "th"):
             self._in_cell = False
             self._row.append("".join(self._cell).strip())
         elif self._depth and tag == "tr":
             self._flush_row()
+        elif self._depth == 0 and tag in self._SKIP_TEXT_TAGS and self._skip_text_depth:
+            self._skip_text_depth -= 1
+        elif self._depth == 0 and tag in self._HEADING_TAGS and self._in_heading:
+            self._in_heading = False
+            self._last_heading = re.sub(
+                r"\s+", " ", " ".join(self._pending_heading)
+            ).strip()
 
     def _flush_row(self) -> None:
         if self._row:
@@ -197,6 +247,10 @@ class _ChartTableParser(HTMLParser):
     def handle_data(self, data):
         if self._in_cell:
             self._cell.append(data)
+        elif self._depth == 0 and not self._skip_text_depth:
+            self._pending_text.append(data)
+            if self._in_heading:
+                self._pending_heading.append(data)
 
     # Backward-compatible single-table view (first table on the page).
     @property
@@ -563,6 +617,828 @@ def parse_chart_destination_table(
 # --------------------------------------------------------------------------- #
 # PDF parser (official airline award-chart PDFs — e.g. Aeroplan, KrisFlyer)
 # --------------------------------------------------------------------------- #
+@dataclass
+class _PdfTableContext:
+    """One pdfplumber table plus the page text around it (cabin hints)."""
+
+    table: _ParsedTable
+    page_text: str = ""
+
+
+def _extract_pdf_tables(data: bytes) -> list[_PdfTableContext]:
+    """Pull every table grid out of a PDF via pdfplumber."""
+    import io
+
+    out: list[_PdfTableContext] = []
+    with pdfplumber.open(io.BytesIO(data)) as pdf:
+        for page in pdf.pages:
+            page_text = (page.extract_text() or "").lower()
+            for raw_table in page.extract_tables() or []:
+                if not raw_table or len(raw_table) < 2:
+                    continue
+                header = [str(c or "").strip().lower() for c in raw_table[0]]
+                body = [
+                    [str(c or "").strip() for c in row]
+                    for row in raw_table[1:]
+                ]
+                out.append(
+                    _PdfTableContext(
+                        table=_ParsedTable(header=header, rows=body),
+                        page_text=page_text,
+                    )
+                )
+    return out
+
+
+def _parse_zone_number(label: str) -> Optional[int]:
+    """Pull a program zone index out of a matrix row/column label."""
+    if not label:
+        return None
+    m = re.search(r"zone\s*(\d{1,2})\b", label, re.I)
+    if m:
+        return int(m.group(1))
+    stripped = label.strip()
+    if stripped.isdigit():
+        return int(stripped)
+    nums = re.findall(r"\b(\d{1,2})\b", label)
+    if nums and "zone" in label.lower():
+        return int(nums[0])
+    return None
+
+
+def _matrix_zone_key(label: str) -> Optional[str | int]:
+    """Map a matrix axis label to a zone number or a canonical region token."""
+    zone = _parse_zone_number(label)
+    if zone is not None:
+        return zone
+    return canonicalize_region(label)
+
+
+def _matrix_miles(value: str) -> Optional[int]:
+    """Parse a zone-matrix cell — handles thousands ('8.5' -> 8500) and ranges."""
+    v = (value or "").strip()
+    if not v or v.lower() in {"n/a", "na", "-", "—", "–", "^"}:
+        return None
+    cleaned = re.sub(r"[^\d.,\-+–—]", "", v).replace(",", "")
+    if not re.search(r"\d", cleaned):
+        return None
+    m = re.match(r"^(\d+(?:\.\d+)?)", cleaned)
+    if not m:
+        return None
+    num = float(m.group(1))
+    # Official PDFs (KrisFlyer, …) quote miles in thousands.
+    if num < 500:
+        num *= 1000
+    return int(num)
+
+
+def _detect_matrix_cabin(*texts: str) -> Optional[str]:
+    """Best-effort single cabin from page/section text (simple matrices)."""
+    joined = " ".join(t for t in texts if t).lower()
+    if not joined:
+        return None
+    if re.search(r"premium\s+economy", joined):
+        return "premium_economy"
+    if re.search(r"\bbusiness\b", joined):
+        return "business"
+    if re.search(r"first|suites", joined):
+        return "first"
+    if re.search(r"\beconomy\b", joined):
+        return "economy"
+    return None
+
+
+_SAVER_MATRIX_CABINS = ["economy", "premium_economy", "business", "first"]
+_ADVANTAGE_MATRIX_CABINS = ["economy", "business", "first"]
+
+
+def _matrix_block_cabins(page_text: str) -> list[str]:
+    """Cabin order for multi-row zone matrices (KrisFlyer official PDFs).
+
+    Saver chart pages carry four rows per origin zone (eco / prem / biz /
+    first); Advantage-only pages carry three (no premium economy — the PDF
+    text says to refer to the Saver chart for premium).
+    """
+    t = page_text.lower()
+    has_saver = "saver award" in t
+    has_advantage = "advantage award" in t
+    if has_saver:
+        return list(_SAVER_MATRIX_CABINS)
+    if has_advantage:
+        return list(_ADVANTAGE_MATRIX_CABINS)
+    return []
+
+
+def _zone_matrix_column_keys(header: list[str]) -> Optional[list[str | int]]:
+    """Return parsed zone keys for columns 1..N, or None if not a matrix."""
+    if len(header) < 3:
+        return None
+    keys: list[str | int] = []
+    for cell in header[1:]:
+        key = _matrix_zone_key(cell)
+        if key is None:
+            return None
+        keys.append(key)
+    return keys if len(keys) >= 2 else None
+
+
+def _is_numeric_zone_matrix(table: _ParsedTable) -> bool:
+    """True when column headers are numeric zone indices (KrisFlyer PDFs)."""
+    col_keys = _zone_matrix_column_keys(table.header)
+    return col_keys is not None and all(isinstance(k, int) for k in col_keys)
+
+
+def _is_zone_matrix_table(table: _ParsedTable) -> bool:
+    """True when a table is a zone×zone matrix (not a wide or destination chart)."""
+    hdr = [h.strip().lower() for h in table.header]
+    if "from" in hdr or any(c in hdr for c in ("to", "distance")):
+        return False
+    if _is_destination_table(table.header):
+        return False
+    col_keys = _zone_matrix_column_keys(table.header)
+    if col_keys is None:
+        return False
+    if _is_numeric_zone_matrix(table):
+        return len(table.rows) >= 1
+    hits = 0
+    for row in table.rows:
+        if not row:
+            continue
+        if _matrix_zone_key(row[0]) is not None:
+            hits += 1
+    return hits >= 2
+
+
+def _region_pair_for_matrix_keys(
+    program: str, key_a: str | int, key_b: str | int
+) -> Optional[tuple[str, str]]:
+    """Turn two matrix axis keys into (region_a, region_b) chart tokens."""
+    prog = program.strip().lower()
+
+    def _token(key: str | int) -> Optional[str]:
+        if isinstance(key, int):
+            return f"{prog}_zone_{key}"
+        return key
+
+    a, b = _token(key_a), _token(key_b)
+    if a is None or b is None:
+        return None
+    return (a, b)
+
+
+def _emit_zone_matrix_rows(
+    table: _ParsedTable,
+    *,
+    program: str,
+    cabin: Optional[str],
+    block_cabins: list[str],
+    updated_at: Optional[str],
+) -> tuple[list[RawChartRow], int]:
+    """Expand one zone×zone matrix table into region-pair chart rows."""
+    col_keys = _zone_matrix_column_keys(table.header)
+    if col_keys is None:
+        return [], 0
+
+    prog = program.strip().lower()
+    out: list[RawChartRow] = []
+    dropped = 0
+    multi_row = len(block_cabins) > 1
+    if not multi_row and (cabin is None or cabin not in _CABINS):
+        return [], 0
+
+    current_origin: str | int | None = None
+    block_idx = 0
+    for row in table.rows:
+        if len(row) < 2:
+            continue
+        row_key = _matrix_zone_key(row[0]) if (row[0] or "").strip() else None
+        if multi_row:
+            if row_key is not None:
+                current_origin = row_key
+                block_idx = 0
+            elif current_origin is None:
+                dropped += 1
+                continue
+        else:
+            if row_key is None:
+                dropped += 1
+                continue
+            current_origin = row_key
+
+        if multi_row:
+            if block_idx >= len(block_cabins):
+                continue
+            row_cabin = block_cabins[block_idx]
+            block_idx += 1
+        else:
+            row_cabin = cabin  # type: ignore[assignment]
+
+        for j, col_key in enumerate(col_keys, start=1):
+            if j >= len(row):
+                continue
+            miles = _matrix_miles(row[j])
+            if miles is None:
+                continue
+            pair = _region_pair_for_matrix_keys(prog, current_origin, col_key)
+            if pair is None:
+                dropped += 1
+                continue
+            region_a, region_b = pair
+            out.append(
+                RawChartRow(
+                    program=prog,
+                    region_a=region_a,
+                    region_b=region_b,
+                    cabin=row_cabin,
+                    miles=miles,
+                    roundtrip=False,
+                    updated_at=updated_at,
+                )
+            )
+    return out, dropped
+
+
+# --------------------------------------------------------------------------- #
+# HTML zone-matrix parser (10xtravel Turkish: region-NUMBER zone x zone grid,
+# one table per cabin, cabin named in a preceding <h3> heading — not a column).
+# --------------------------------------------------------------------------- #
+# Matches ONLY a clean, standalone "Economy Class" / "Premium Economy Class"
+# heading — the FULL heading text, nothing else (see `preceding_heading`,
+# which carries just the one h1-h6 tag's own text, not surrounding prose).
+# Deliberately a full match (^...$), so "Economy to Business Class"
+# (10xtravel's UPGRADE-cost tables — a same-shaped-but-different-meaning
+# matrix on the same page) does NOT match: matching it would silently
+# mislabel upgrade-fare data as award-chart data.
+_CABIN_CLASS_HEADING_RE = re.compile(
+    r"^(premium\s+economy|economy|business|first)\s+class$", re.I
+)
+
+
+def _strict_cabin_heading(heading: str) -> Optional[str]:
+    """A cabin name ONLY when the heading is EXACTLY "<Cabin> Class".
+
+    Returns None (selector miss) for a blank/missing heading, and for
+    anything that isn't that exact two/three-word shape — e.g. "Economy to
+    Business Class" (an upgrade/conversion table, not an award chart, despite
+    sharing the exact same zone-matrix grid shape).
+    """
+    norm = re.sub(r"\s+", " ", (heading or "")).strip()
+    if not norm:
+        return None
+    m = _CABIN_CLASS_HEADING_RE.match(norm)
+    if not m:
+        return None
+    word = m.group(1).lower()
+    return "premium_economy" if "premium" in word else word
+
+
+def parse_chart_html_zone_matrix(
+    text: str,
+    *,
+    program: str,
+    updated_at: Optional[str] = None,
+    stats: Optional[dict] = None,
+) -> list[RawChartRow]:
+    """Parse an HTML region-number zone x zone matrix, one table per cabin.
+
+    Shape (10xtravel's Turkish Miles&Smiles page after its 2026 redesign):
+    a legend table (region number -> name), then ONE zone x zone matrix table
+    PER CABIN, each preceded by a clean "<Cabin> Class" heading (§ live-scrape
+    debugging 2026-07-06). Reuses the exact same matrix-cell parsing
+    (`_is_zone_matrix_table` / `_emit_zone_matrix_rows`) as the PDF zone-matrix
+    path (KrisFlyer) — the grid shape is identical; only where the cabin name
+    comes from differs (a page heading here vs. a page-text hint in a PDF).
+    """
+    parser = _ChartTableParser()
+    try:
+        parser.feed(text)
+    except Exception as exc:
+        log.info("html zone matrix parse error: %s", exc)
+        return []
+
+    out: list[RawChartRow] = []
+    dropped = 0
+    matched = False
+    for table in parser.tables:
+        if not _is_zone_matrix_table(table):
+            continue
+        cabin = _strict_cabin_heading(table.preceding_heading)
+        if cabin is None:
+            # Either an upgrade/conversion matrix (rejected on purpose) or a
+            # matrix-shaped table with no attributable cabin heading — a
+            # selector miss, never guessed.
+            continue
+        matched = True
+        rows, row_dropped = _emit_zone_matrix_rows(
+            table, program=program, cabin=cabin, block_cabins=[],
+            updated_at=updated_at,
+        )
+        out.extend(rows)
+        dropped += row_dropped
+    if not matched:
+        log.info("html zone matrix: no cabin-attributable zone matrix found")
+        return []
+    if stats is not None:
+        stats["dropped"] = stats.get("dropped", 0) + dropped
+        stats["html_route"] = "zone_matrix"
+    if dropped:
+        log.info("html zone matrix: dropped %d uncanonicalizable row(s)", dropped)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# HTML seasonal zone-pair parser (10xtravel ANA: a small round-trip "season x
+# cabin" table per zone pair, the pair named in a preceding caption).
+# --------------------------------------------------------------------------- #
+_ANA_SEASON_CABIN_MAP = {
+    "economy class": "economy",
+    "premium economy class": "premium_economy",
+    "business class": "business",
+    "first class": "first",
+}
+
+_ZONE_NUM_RE = re.compile(r"zone\s*(\d{1,2})", re.I)
+
+
+def _is_seasonal_zone_table(table: "_ParsedTable") -> bool:
+    """True for a 'season | <cabin class> | ...' round-trip table."""
+    hdr = [h.strip().lower() for h in table.header]
+    if not hdr or hdr[0] != "season":
+        return False
+    return any(h in _ANA_SEASON_CABIN_MAP for h in hdr)
+
+
+def _zone_pair_from_caption(text: str) -> Optional[tuple[int, int]]:
+    """Pull the two zone numbers out of a 'Routes between X (Zone N) and Y
+    (Zone M)' caption. Takes the LAST two 'Zone N' mentions in the captured
+    context so an intro paragraph naming other zones earlier doesn't win."""
+    nums = _ZONE_NUM_RE.findall(text or "")
+    if len(nums) < 2:
+        return None
+    return int(nums[-2]), int(nums[-1])
+
+
+def _build_zone_region_legend(tables: list["_ParsedTable"]) -> dict[int, str]:
+    """Read a 'Zone name | Zone number | Geographic regions included' legend
+    table into {zone_number: canonical_region}, via the SAME region-name
+    canonicalizer every other chart uses (§A) — no new region vocabulary. A
+    zone whose name doesn't canonicalize is simply absent from the map, which
+    downstream drops+counts any row that needs it (never guessed)."""
+    legend: dict[int, str] = {}
+    for table in tables:
+        hdr = [h.strip().lower() for h in table.header]
+        if not ({"zone name", "zone number"} <= set(hdr)):
+            continue
+        name_i, num_i = hdr.index("zone name"), hdr.index("zone number")
+        for row in table.rows:
+            if len(row) <= max(name_i, num_i):
+                continue
+            m = _ZONE_NUM_RE.search(row[num_i] or "")
+            if not m:
+                continue
+            region = canonicalize_region(row[name_i] or "")
+            if region is None:
+                continue
+            legend.setdefault(int(m.group(1)), region)
+    return legend
+
+
+def parse_chart_html_seasonal_zones(
+    text: str,
+    *,
+    program: str,
+    updated_at: Optional[str] = None,
+    stats: Optional[dict] = None,
+) -> list[RawChartRow]:
+    """Parse 10xtravel's ANA-style page: a zone legend + many small per-zone-
+    pair round-trip tables (season x cabin), each preceded by a "Routes
+    between X (Zone N) and Y (Zone M)" caption (§ live-scrape debugging
+    2026-07-06). Scope: the ANA-operated international zone-pair tables only —
+    the domestic distance-band tables and partner-operated departure tables
+    on the same page use two OTHER shapes and are intentionally left for a
+    follow-up rather than guessed at.
+
+    Only the LOW-SEASON row is emitted per cabin (the cheapest/"Saver"-
+    equivalent tier, consistent with how every other chart in this codebase
+    reports its lowest available price). All rows are flagged `roundtrip=True`
+    per the page's own stated convention ("divide the following prices in
+    half" for one-way) — `normalize_one_way` converts downstream, same as the
+    existing ANA wide-chart source.
+    """
+    parser = _ChartTableParser()
+    try:
+        parser.feed(text)
+    except Exception as exc:
+        log.info("html seasonal zones parse error: %s", exc)
+        return []
+
+    legend = _build_zone_region_legend(parser.tables)
+    if not legend:
+        log.info("html seasonal zones: no zone legend table found")
+        return []
+
+    prog = program.strip().lower()
+    out: list[RawChartRow] = []
+    dropped = 0
+    matched = False
+    for table in parser.tables:
+        if not _is_seasonal_zone_table(table):
+            continue
+        zone_pair = _zone_pair_from_caption(table.preceding_text)
+        if zone_pair is None:
+            dropped += 1
+            continue
+        zone_a, zone_b = zone_pair
+        region_a, region_b = legend.get(zone_a), legend.get(zone_b)
+        if region_a is None or region_b is None:
+            dropped += 1  # zone not in the legend -> drop + count, never guess
+            continue
+        matched = True
+
+        hdr = [h.strip().lower() for h in table.header]
+        cabin_cols = [
+            (i, _ANA_SEASON_CABIN_MAP[h]) for i, h in enumerate(hdr)
+            if h in _ANA_SEASON_CABIN_MAP
+        ]
+        for row in table.rows:
+            if not row or "low" not in (row[0] or "").strip().lower():
+                continue  # only the low-season (cheapest) row
+            for col_i, cabin in cabin_cols:
+                if col_i >= len(row):
+                    continue
+                miles = _wide_miles(row[col_i] or "")
+                if miles is None:
+                    continue
+                out.append(
+                    RawChartRow(
+                        program=prog,
+                        region_a=region_a,
+                        region_b=region_b,
+                        cabin=cabin,
+                        miles=miles,
+                        roundtrip=True,
+                        updated_at=updated_at,
+                    )
+                )
+    if not matched:
+        log.info("html seasonal zones: no zone-pair table resolved against the legend")
+        return []
+    if stats is not None:
+        stats["dropped"] = stats.get("dropped", 0) + dropped
+        stats["html_route"] = "seasonal_zones"
+    if dropped:
+        log.info("html seasonal zones: dropped %d row(s)", dropped)
+    return out
+
+
+def _parse_pdf_wide(
+    tables: list[_ParsedTable],
+    *,
+    program: str,
+    updated_at: Optional[str],
+    stats: Optional[dict],
+) -> list[RawChartRow]:
+    table = _select_wide_table(tables)
+    if table is None:
+        return []
+    out, dropped = _emit_wide_rows(
+        table.header, table.rows, program=program, updated_at=updated_at
+    )
+    if out is None:
+        return []
+    if stats is not None:
+        stats["dropped"] = stats.get("dropped", 0) + dropped
+        stats["pdf_route"] = "wide"
+    if dropped:
+        log.info("pdf wide: dropped %d uncanonicalizable row(s)", dropped)
+    return out
+
+
+def _parse_pdf_zone_matrix(
+    contexts: list[_PdfTableContext],
+    *,
+    program: str,
+    updated_at: Optional[str],
+    stats: Optional[dict],
+) -> list[RawChartRow]:
+    """Parse zone×zone matrix tables (KrisFlyer zones 1–13, LifeMiles regions, …)."""
+    out: list[RawChartRow] = []
+    dropped = 0
+    matched = False
+    for ctx in contexts:
+        table = ctx.table
+        if not _is_zone_matrix_table(table):
+            continue
+        matched = True
+        block_cabins = (
+            _matrix_block_cabins(ctx.page_text)
+            if _is_numeric_zone_matrix(table)
+            else []
+        )
+        cabin = None if block_cabins else _detect_matrix_cabin(
+            ctx.page_text, " ".join(table.header)
+        )
+        if not block_cabins and cabin is None:
+            log.info("pdf zone matrix: table matched but no cabin hint on page")
+            continue
+        rows, row_dropped = _emit_zone_matrix_rows(
+            table,
+            program=program,
+            cabin=cabin,
+            block_cabins=block_cabins,
+            updated_at=updated_at,
+        )
+        out.extend(rows)
+        dropped += row_dropped
+    if not matched:
+        return []
+    if stats is not None:
+        stats["dropped"] = stats.get("dropped", 0) + dropped
+        stats["pdf_route"] = "zone_matrix"
+    if dropped:
+        log.info("pdf zone matrix: dropped %d uncanonicalizable row(s)", dropped)
+    return out
+
+
+_PAGE_ZONE_RE = re.compile(
+    r"((?:Within|Between)\s+[A-Za-z][^\n]{2,80}?)\s+zones?\b",
+    re.I,
+)
+
+
+def _pdf_pts_miles(value: str) -> Optional[int]:
+    """Parse Aeroplan PDF cells like ``6,000 pts`` or ``Starting at\\n6,000 pts``."""
+    if not value or "median" in value.lower():
+        return None
+    return _to_int(value)
+
+
+def _aeroplan_pdf_cabin_cols(header: list[str]) -> dict[str, int]:
+    """Map canonical cabin -> first column index on an Aeroplan distance PDF table."""
+    cols: dict[str, int] = {}
+    for i, raw in enumerate(header):
+        if not raw:
+            continue
+        h = raw.strip().lower()
+        if "premium" in h and "economy" in h:
+            cols.setdefault("premium_economy", i)
+        elif h == "economy":
+            cols.setdefault("economy", i)
+        elif h == "business":
+            cols.setdefault("business", i)
+        elif h == "first":
+            cols.setdefault("first", i)
+    return cols
+
+
+def _is_aeroplan_distance_pdf_table(header: list[str]) -> bool:
+    joined = " ".join(h for h in header if h)
+    if "distance" not in joined or "operated" not in joined:
+        return False
+    return bool(_aeroplan_pdf_cabin_cols(header))
+
+
+def _zone_pair_from_page_text(text: str) -> Optional[tuple[str, str]]:
+    m = _PAGE_ZONE_RE.search(text or "")
+    if not m:
+        return None
+    return canonicalize_zone_pair(m.group(1).strip())
+
+
+def _emit_aeroplan_distance_pdf_rows(
+    table: _ParsedTable,
+    *,
+    zone_pair: tuple[str, str],
+    program: str,
+    updated_at: Optional[str],
+) -> tuple[list[RawChartRow], int]:
+    """Parse one Aeroplan official distance-band table (partner fixed rows)."""
+    cabin_cols = _aeroplan_pdf_cabin_cols(table.header)
+    if not cabin_cols:
+        return [], 0
+    hdr = table.header
+    try:
+        op_i = next(i for i, h in enumerate(hdr) if h and "operated" in h)
+    except StopIteration:
+        return [], 0
+
+    region_a, region_b = zone_pair
+    prog = program.strip().lower()
+    out: list[RawChartRow] = []
+    dropped = 0
+    current_band: Optional[tuple[int, int]] = None
+
+    for row in table.rows:
+        if len(row) <= op_i:
+            continue
+        dist_cell = (row[0] or "").strip()
+        if dist_cell:
+            band = parse_distance_band(dist_cell)
+            if band is not None:
+                current_band = band
+        operated = (row[op_i] or "").lower()
+        if "all other partners" not in operated:
+            continue
+        if current_band is None:
+            dropped += 1
+            continue
+        dist_min, dist_max = current_band
+        for cabin, col_i in cabin_cols.items():
+            if col_i >= len(row):
+                continue
+            miles = _pdf_pts_miles(row[col_i] or "")
+            if miles is None:
+                continue
+            out.append(
+                RawChartRow(
+                    program=prog,
+                    region_a=region_a,
+                    region_b=region_b,
+                    cabin=cabin,
+                    miles=miles,
+                    roundtrip=False,
+                    updated_at=updated_at,
+                    distance_min=dist_min,
+                    distance_max=dist_max,
+                )
+            )
+    return out, dropped
+
+
+def _parse_pdf_aeroplan_distance(
+    contexts: list[_PdfTableContext],
+    *,
+    program: str,
+    updated_at: Optional[str],
+    stats: Optional[dict],
+) -> list[RawChartRow]:
+    """Parse Aeroplan official PDF distance-band tables (zone title + grid)."""
+    out: list[RawChartRow] = []
+    dropped = 0
+    matched = False
+    for ctx in contexts:
+        table = ctx.table
+        if not _is_aeroplan_distance_pdf_table(table.header):
+            continue
+        zone_pair = _zone_pair_from_page_text(ctx.page_text)
+        if zone_pair is None:
+            log.info("pdf aeroplan distance: table without page zone title")
+            continue
+        matched = True
+        rows, row_dropped = _emit_aeroplan_distance_pdf_rows(
+            table,
+            zone_pair=zone_pair,
+            program=program,
+            updated_at=updated_at,
+        )
+        out.extend(rows)
+        dropped += row_dropped
+    if not matched:
+        return []
+    if stats is not None:
+        stats["dropped"] = stats.get("dropped", 0) + dropped
+        stats["pdf_route"] = "aeroplan_distance"
+    if dropped:
+        log.info("pdf aeroplan distance: dropped %d row(s)", dropped)
+    return out
+
+
+def _parse_pdf_lifemiles_text(
+    data: bytes,
+    *,
+    program: str,
+    updated_at: Optional[str] = None,
+    stats: Optional[dict] = None,
+) -> list[RawChartRow]:
+    """Parse the 2022 Thrifty Traveler LifeMiles zone PDF via page text (§6).
+
+    pdfplumber's default table extractor returns nothing for this layout — the
+    chart is a lower-triangular region matrix with X/I/O cabin rows per origin.
+    """
+    import io
+
+    if not _HAS_PDFPLUMBER:
+        return []
+    try:
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            text = pdf.pages[0].extract_text() or ""
+    except Exception as exc:
+        log.info("lifemiles pdf text: %s", exc)
+        return []
+
+    _LM_REGIONS = [
+        "North of Central America",
+        "South of Central America",
+        "Hawaii",
+        "Rest of North America",
+        "United States 1",
+        "United States 2",
+        "United States 3",
+        "Mexico",
+        "Carribean",
+        "North of South America",
+        "South of South America",
+        "Brazil",
+        "Europe 1",
+        "Europe 2",
+        "Europe 3",
+        "Middle East / North Africa",
+        "South Africa",
+        "North Asia",
+        "Central Asia",
+        "South Asia",
+    ]
+    _LM_CANON = {
+        "north of central america": "north_america",
+        "south of central america": "north_america",
+        "hawaii": "north_america",
+        "rest of north america": "north_america",
+        "united states 1": "north_america",
+        "united states 2": "north_america",
+        "united states 3": "north_america",
+        "mexico": "north_america",
+        "carribean": "north_america",
+        "caribbean": "north_america",
+        "north of south america": "south_america",
+        "south of south america": "south_america",
+        "brazil": "south_america",
+        "europe 1": "europe",
+        "europe 2": "europe",
+        "europe 3": "europe",
+        "middle east / north africa": "middle_east",
+        "south africa": "africa",
+        "north asia": "north_asia",
+        "central asia": "south_asia",
+        "south asia": "south_asia",
+    }
+    _LM_CABIN = {"X": "economy", "I": "economy", "O": "business"}
+    _CABIN_RE = re.compile(r"^([XIO])\s+((?:\d{1,3}(?:,\d{3})*\s*)+)$")
+    _REGION_CABIN_RE = re.compile(
+        r"^(.+?)\s+([XIO])\s+((?:\d{1,3}(?:,\d{3})*\s*)+)$"
+    )
+    _MILES_RE = re.compile(r"\d{1,3}(?:,\d{3})*")
+    _SKIP_PREFIX = (
+        "Star Alliance", "In order", "Find the", "From/to", "Pinpoint",
+        "Below the", "El Salvador)",
+    )
+
+    def _canon(name: str) -> Optional[str]:
+        return _LM_CANON.get(name.lower().strip())
+
+    def _emit(origin: str, cabin_code: str, values: list[int]) -> None:
+        cab = _LM_CABIN.get(cabin_code)
+        if cab is None or origin not in _LM_REGIONS:
+            return
+        ra = _canon(origin)
+        if ra is None:
+            return
+        oi = _LM_REGIONS.index(origin)
+        for j, miles in enumerate(values):
+            di = oi + j
+            if di >= len(_LM_REGIONS):
+                break
+            rb = _canon(_LM_REGIONS[di])
+            if rb is None:
+                continue
+            out.append(
+                RawChartRow(
+                    program=program,
+                    region_a=ra,
+                    region_b=rb,
+                    cabin=cab,
+                    miles=miles,
+                    roundtrip=False,
+                    updated_at=updated_at,
+                )
+            )
+
+    out: list[RawChartRow] = []
+    current_origin: Optional[str] = None
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line or any(line.startswith(p) for p in _SKIP_PREFIX):
+            continue
+        if line.startswith("("):
+            continue
+        m = _REGION_CABIN_RE.match(line)
+        if m:
+            current_origin = m.group(1).strip()
+            vals = [int(x.replace(",", "")) for x in _MILES_RE.findall(m.group(3))]
+            _emit(current_origin, m.group(2), vals)
+            continue
+        m = _CABIN_RE.match(line)
+        if m and current_origin:
+            vals = [int(x.replace(",", "")) for x in _MILES_RE.findall(m.group(2))]
+            _emit(current_origin, m.group(1), vals)
+            continue
+        if not re.search(r"\d", line) and len(line) > 2 and line not in {"Oceania"}:
+            current_origin = line.strip()
+
+    if stats is not None and out:
+        stats["pdf_route"] = "lifemiles_text"
+    return out
+
+
 def parse_chart_pdf(
     data: Optional[bytes],
     *,
@@ -570,17 +1446,21 @@ def parse_chart_pdf(
     updated_at: Optional[str] = None,
     stats: Optional[dict] = None,
 ) -> list[RawChartRow]:
-    """Extract wide award-chart rows from a PDF's tables (§6).
+    """Route PDF bytes through wide-table, Aeroplan-distance, then zone-matrix parsers (§6).
 
-    Uses `pdfplumber` to pull the laid-out tables out of an official chart PDF
-    (the highest-trust Aeroplan + KrisFlyer sources), then runs each table
-    through the SAME wide-chart row logic as the HTML path (`_emit_wide_rows`),
-    so geography canonicalization and the anti-hallucination contract are
-    identical regardless of input format.
+    Official airline PDFs arrive in three shapes:
 
-    Degrades gracefully: returns `[]` (never raises) when pdfplumber is not
-    installed or no chart-shaped table is found — the source simply produces no
-    data, exactly as before.
+      - **Wide table** (ATF-style HTML mirrors): ``from | distance/to | cabins…``
+      - **Aeroplan distance PDF**: page title names the zone pair; table rows
+        are distance bands × ``All other partners`` fixed partner pricing
+      - **Zone matrix** (KrisFlyer zones 1–13, LifeMiles region grids)
+        row/column headers name zones; each cell is the one-way miles for that
+        pair. Numeric zone indices become ``{program}_zone_{n}`` region tokens;
+        named headers (``North America``, ``Europe``, …) canonicalize through
+        ``canonicalize_region``.
+
+    Degrades gracefully: returns ``[]`` (never raises) when pdfplumber is not
+    installed or neither parser shape matches.
     """
     if not _HAS_PDFPLUMBER:
         log.info("pdf chart: pdfplumber not installed; skipping (pip install pdfplumber)")
@@ -589,40 +1469,47 @@ def parse_chart_pdf(
         log.info("pdf chart: no bytes to parse")
         return []
 
-    import io
-
-    tables: list[_ParsedTable] = []
     try:
-        with pdfplumber.open(io.BytesIO(data)) as pdf:
-            for page in pdf.pages:
-                for raw_table in page.extract_tables() or []:
-                    if not raw_table or len(raw_table) < 2:
-                        continue
-                    header = [str(c or "").strip().lower() for c in raw_table[0]]
-                    body = [
-                        [str(c or "").strip() for c in row]
-                        for row in raw_table[1:]
-                    ]
-                    tables.append(_ParsedTable(header=header, rows=body))
+        contexts = _extract_pdf_tables(data)
     except Exception as exc:
         log.info("pdf parse error: %s", exc)
         return []
 
-    table = _select_wide_table(tables)
-    if table is None:
-        log.info("pdf chart: no wide award-chart table found in PDF")
+    if not contexts:
+        log.info("pdf chart: no tables extracted from PDF")
+        if program == "lifemiles":
+            return _parse_pdf_lifemiles_text(
+                data, program=program, updated_at=updated_at, stats=stats
+            )
         return []
 
-    out, dropped = _emit_wide_rows(
-        table.header, table.rows, program=program, updated_at=updated_at
+    tables = [ctx.table for ctx in contexts]
+
+    out = _parse_pdf_wide(
+        tables, program=program, updated_at=updated_at, stats=stats
     )
-    if out is None:
-        return []
-    if stats is not None:
-        stats["dropped"] = stats.get("dropped", 0) + dropped
-    if dropped:
-        log.info("pdf chart: dropped %d uncanonicalizable row(s)", dropped)
-    return out
+    if out:
+        return out
+
+    out = _parse_pdf_aeroplan_distance(
+        contexts, program=program, updated_at=updated_at, stats=stats
+    )
+    if out:
+        return out
+
+    out = _parse_pdf_zone_matrix(
+        contexts, program=program, updated_at=updated_at, stats=stats
+    )
+    if out:
+        return out
+
+    if program == "lifemiles":
+        return _parse_pdf_lifemiles_text(
+            data, program=program, updated_at=updated_at, stats=stats
+        )
+
+    log.info("pdf chart: no wide, aeroplan-distance, or zone-matrix chart found")
+    return []
 
 
 # --------------------------------------------------------------------------- #

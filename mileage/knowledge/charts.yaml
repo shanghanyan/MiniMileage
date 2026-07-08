@@ -101,6 +101,124 @@ region_map:
   LOS: africa
   ADD: africa
 
+# Program-specific award zones (zone-matrix PDFs — KrisFlyer zones 1–13).
+# Maps IATA -> zone index; lookup emits ``{program}_zone_{n}`` tokens that
+# match rows parsed from official zone×zone PDF charts.
+program_zones:
+  krisflyer:
+    SIN: 1
+    KUL: 2
+    CGK: 2
+    BKK: 3
+    MNL: 3
+    HKG: 4
+    TPE: 4
+    PEK: 5
+    PVG: 5
+    DEL: 6
+    BOM: 6
+    NRT: 7
+    HND: 7
+    ICN: 7
+    PER: 8
+    SYD: 9
+    MEL: 9
+    AKL: 9
+    DXB: 10
+    IST: 10
+    JNB: 10
+    LHR: 11
+    CDG: 11
+    FRA: 11
+    AMS: 11
+    LAX: 12
+    SFO: 12
+    YVR: 12
+    JFK: 13
+    EWR: 13
+  # Turkish Miles&Smiles — 12 regions (10xtravel / official zone matrix).
+  turkish:
+    IST: 1
+    LHR: 3
+    CDG: 3
+    FRA: 3
+    AMS: 3
+    MAD: 3
+    BCN: 3
+    FCO: 3
+    MUC: 3
+    ZRH: 3
+    VIE: 3
+    CPH: 3
+    ARN: 3
+    DUB: 3
+    LIS: 3
+    BRU: 3
+    ATH: 2
+    DEL: 4
+    BOM: 4
+    BLR: 4
+    MAA: 4
+    DXB: 5
+    DOH: 5
+    AUH: 5
+    TLV: 5
+    JED: 5
+    RUH: 5
+    CAI: 6
+    ADD: 7
+    NBO: 7
+    LOS: 7
+    JNB: 8
+    CPT: 8
+    NRT: 9
+    HND: 9
+    ICN: 9
+    PEK: 9
+    PVG: 9
+    HKG: 9
+    TPE: 9
+    KIX: 9
+    GMP: 9
+    CAN: 9
+    SIN: 9
+    BKK: 9
+    KUL: 9
+    CGK: 9
+    MNL: 9
+    HAN: 9
+    SGN: 9
+    DPS: 9
+    LAX: 10
+    JFK: 10
+    SFO: 10
+    ORD: 10
+    EWR: 10
+    IAD: 10
+    SEA: 10
+    BOS: 10
+    ATL: 10
+    DFW: 10
+    DEN: 10
+    MIA: 10
+    IAH: 10
+    PHX: 10
+    LAS: 10
+    MCO: 10
+    YYZ: 10
+    YVR: 10
+    YUL: 10
+    GRU: 11
+    EZE: 11
+    SCL: 11
+    BOG: 11
+    LIM: 11
+    SYD: 12
+    MEL: 12
+    AKL: 12
+    BNE: 12
+    PER: 12
+
 # Airport coordinates [latitude, longitude] for the great-circle distance-band
 # resolver (§A.4 — Aeroplan-style distance charts). Sourced from public airport
 # coordinates; rounded — distance bands are thousands of miles wide, so degree-

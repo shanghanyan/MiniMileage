@@ -379,11 +379,15 @@ def test_user_agent_rotates_and_is_not_self_identifying() -> None:
 
 
 class _FakePdfPage:
-    def __init__(self, tables):
+    def __init__(self, tables, text: str = "economy saver award chart"):
         self._tables = tables
+        self._text = text
 
     def extract_tables(self):
         return self._tables
+
+    def extract_text(self):
+        return self._text
 
 
 class _FakePdf:
@@ -397,14 +401,14 @@ class _FakePdf:
         return False
 
 
-def _install_fake_pdfplumber(tables):
+def _install_fake_pdfplumber(tables, *, page_text: str = "economy saver award chart"):
     """Patch the optional pdfplumber dep with a deterministic stand-in so the
     PDF path is exercised offline, regardless of whether the binary is present.
     Returns a restore() callable."""
     class _FakePlumber:
         @staticmethod
         def open(_buf):
-            return _FakePdf([_FakePdfPage(tables)])
+            return _FakePdf([_FakePdfPage(tables, text=page_text)])
 
     orig_mod, orig_flag = agg_parse.pdfplumber, agg_parse._HAS_PDFPLUMBER
     agg_parse.pdfplumber = _FakePlumber
@@ -447,6 +451,76 @@ def test_pdf_chart_degrades_without_pdfplumber() -> None:
         assert parse_chart_pdf(b"anything", program="aeroplan") == []
     finally:
         agg_parse._HAS_PDFPLUMBER = orig
+
+
+def test_pdf_routes_to_zone_matrix_named_regions() -> None:
+    """LifeMiles-style region×region matrix falls through wide and hits zone path."""
+    tables = [[
+        ["", "north america", "europe", "north asia"],
+        ["north america", "12,500", "30,000", "40,000"],
+        ["europe", "30,000", "—", "75,000"],
+        ["antarctica", "99,000", "199,000", "299,000"],  # unmappable row label
+    ]]
+    restore = _install_fake_pdfplumber(tables)
+    try:
+        stats: dict = {}
+        rows = parse_chart_pdf(
+            b"%PDF-1.4 fake", program="lifemiles", stats=stats,
+            updated_at="2022-06-01",
+        )
+    finally:
+        restore()
+    assert stats.get("pdf_route") == "zone_matrix"
+    assert stats.get("dropped") == 1
+    miles = {(r.region_a, r.region_b, r.cabin): r.miles for r in rows}
+    assert miles[("north_america", "europe", "economy")] == 30000
+    assert miles[("north_america", "north_asia", "economy")] == 40000
+    assert ("antarctica", "europe", "economy") not in miles
+
+
+def test_pdf_routes_to_zone_matrix_numeric_zones() -> None:
+    """KrisFlyer-style zone 1–13 matrix uses program-scoped zone tokens."""
+    tables = [[
+        ["", "1", "11", "13"],
+        ["zone 1: singapore", "—", "44", "46"],
+        ["zone 11: europe", "44", "—", "25"],
+    ]]
+    restore = _install_fake_pdfplumber(tables)
+    try:
+        stats: dict = {}
+        rows = parse_chart_pdf(
+            b"%PDF-1.4 fake", program="krisflyer", stats=stats,
+        )
+    finally:
+        restore()
+    assert stats.get("pdf_route") == "zone_matrix"
+    miles = {(r.region_a, r.region_b, r.cabin): r.miles for r in rows}
+    assert miles[("krisflyer_zone_1", "krisflyer_zone_11", "economy")] == 44000
+    assert miles[("krisflyer_zone_1", "krisflyer_zone_13", "economy")] == 46000
+    assert miles[("krisflyer_zone_11", "krisflyer_zone_13", "economy")] == 25000
+
+
+def test_pdf_wide_route_takes_precedence() -> None:
+    """When both shapes exist, the wide-table parser wins."""
+    tables = [
+        [
+            ["", "1", "2"],
+            ["zone 1", "8.5", "13.5"],
+        ],
+        [
+            ["from", "to", "economy", "business"],
+            ["north america", "europe", "30,000", "63,000"],
+        ],
+    ]
+    restore = _install_fake_pdfplumber(tables)
+    try:
+        stats: dict = {}
+        rows = parse_chart_pdf(b"%PDF-1.4 fake", program="lifemiles", stats=stats)
+    finally:
+        restore()
+    assert stats.get("pdf_route") == "wide"
+    assert len(rows) == 2
+    assert rows[0].region_a == "north_america" and rows[0].region_b == "europe"
 
 
 def test_pdf_target_flows_through_provider() -> None:

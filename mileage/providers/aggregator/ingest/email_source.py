@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.message import Message
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from ..parse import RawChartRow
 from .devaluation import detect_devaluation
@@ -54,6 +54,7 @@ class DiscoveryResult:
     rows: List[dict] = field(default_factory=list)          # serialized RawChartRow + provenance
     stale_programs: set = field(default_factory=set)
     used_fixtures: bool = False
+    email_links_followed: int = 0
 
 
 # --------------------------------------------------------------------------- #
@@ -195,10 +196,17 @@ def run_discovery(
     config: "Config",
     *,
     extractor=None,
+    fetcher=None,
+    cache: Any = None,
+    caption_fetcher=None,
     fixture_dir: Optional[Path] = None,
     limit: int = 50,
+    link_limit: int = 5,
 ) -> DiscoveryResult:
     """Poll the mailbox, extract grounded rows, detect devaluations.
+
+    When ``fetcher`` is provided, http(s)/file blog and YouTube links embedded
+    in the email body are also fetched and extracted (same grounded extractor).
 
     Pure with respect to the store: it returns a `DiscoveryResult`; persisting
     to `discovered_charts.json` is the caller's job (the CLI), so the function
@@ -213,6 +221,8 @@ def run_discovery(
         config, fixture_dir=fixture_dir, limit=limit
     )
     result = DiscoveryResult(documents=documents, used_fixtures=used_fixtures)
+
+    from .email_links import follow_links_in_document
 
     for doc in documents:
         program = detect_devaluation(doc.subject)
@@ -238,4 +248,17 @@ def run_discovery(
                     "trust": 0.3,  # discovered rows are second-class until confirmed
                 }
             )
+
+        if fetcher is not None:
+            link_rows, n_links = follow_links_in_document(
+                doc,
+                fetcher=fetcher,
+                extractor=extractor,
+                cache=cache,
+                caption_fetcher=caption_fetcher,
+                limit=link_limit,
+            )
+            result.rows.extend(link_rows)
+            result.email_links_followed += n_links
+
     return result

@@ -742,6 +742,28 @@ def run_discover(
     return 0
 
 
+def run_scrape_daily(config: Config, repo: Optional[Repository] = None) -> int:
+    """Daily scrape for cron — discovery + chart scrape, persisted to Redis/file."""
+    from .providers.aggregator.live_scrape import run_daily_scrape
+
+    print()
+    print("Daily scrape — discovery + chart sources (§6)")
+    print("=" * 68)
+    payload = run_daily_scrape(config=config, repo=repo)
+    storage = payload.get("storage", "?")
+    backend = payload.get("storage_backend", "?")
+    disc = payload.get("discovery") or {}
+    scrape = (payload.get("scrape") or {}).get("summary") or {}
+    print(f"  completed_at       : {payload.get('completed_at')}")
+    print(f"  persisted via      : {storage} ({backend})")
+    print(f"  discovery rows     : {disc.get('row_count', 0)}  {disc.get('detail', '')}")
+    print(f"  chart primaries ok : {scrape.get('all_primaries_ok')}")
+    print(f"  fallback warnings  : {scrape.get('fallback_warn', 0)}")
+    print("=" * 68)
+    print()
+    return 0 if scrape.get("all_primaries_ok") else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mileage", description=__doc__)
     parser.add_argument("--verbose", action="store_true", help="debug logging")
@@ -800,6 +822,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="also sweep creator blogs + transcripts (slower; default is "
         "email-only)",
+    )
+
+    ds = sub.add_parser(
+        "scrape-daily",
+        help="daily scrape for cron: discovery + chart sources, save to "
+        "Redis Cloud (MILEAGE_REDIS_URL) or daily_scrape.json",
     )
 
     p = sub.add_parser("providers", help="provider federation status + quota")
@@ -878,6 +906,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                 dry_run=getattr(args, "dry_run", False),
                 full=getattr(args, "full", False),
             )
+
+        if args.command == "scrape-daily":
+            return run_scrape_daily(config, repo)
 
         if args.command == "demo":
             return run_demo(registry, repo, config)

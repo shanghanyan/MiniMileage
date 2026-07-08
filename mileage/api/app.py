@@ -19,16 +19,25 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from .. import obs
-from ..config import Config, build_registry, build_repository, load_federation
+from ..config import Config, build_registry, build_repository, build_stores, load_federation
 from ..domain.models import User
-from ..providers.aggregator.live_scrape import run_live_scrape
+from ..providers.aggregator.live_scrape import (
+    run_daily_scrape,
+    run_discovery_intake,
+    run_live_scrape,
+)
+from ..providers.aggregator.path_inventory import build_path_inventory
+from ..providers.aggregator.scrape_store import load_daily_snapshot
 from .auth import make_current_user_dependency
 from .orchestrator import RunOrchestrator, request_to_route, request_to_user
 from .schemas import (
     FreshnessProvider,
     FreshnessResponse,
     FreshnessSource,
+    LiveScrapeDiscoveryResult,
     LiveScrapeResponse,
+    DailyScrapeResponse,
+    ScrapeInventoryResponse,
     RedemptionRequest,
     RedemptionResponse,
     RunStatusResponse,
@@ -198,8 +207,23 @@ def upsert_user(
     )
 
 
+@app.get("/scrape/inventory", response_model=ScrapeInventoryResponse)
+def scrape_inventory(config: Config = Depends(get_config)) -> ScrapeInventoryResponse:
+    """Return every wired scrape/discovery path and its readiness (§6).
+
+    Cheap metadata only — no network I/O. The Live Scrape page loads this on
+    mount to show discovery channels (email, blogs, YouTube) and federated
+    providers (Amadeus, Travelpayouts, seats.aero, …) alongside the
+    ``sources.yaml`` chart targets that ``/scrape/live`` walks.
+    """
+    return ScrapeInventoryResponse(**build_path_inventory(config).to_dict())
+
+
 @app.get("/scrape/live", response_model=LiveScrapeResponse)
-def scrape_live(offline: bool = False) -> LiveScrapeResponse:
+def scrape_live(
+    offline: bool = False,
+    config: Config = Depends(get_config),
+) -> LiveScrapeResponse:
     """Run the live scrape and return a role-aware per-target report (§6).
 
     This is the manual "Live scrape" button behind the UI diagnostics page: it
@@ -207,6 +231,9 @@ def scrape_live(offline: bool = False) -> LiveScrapeResponse:
     resolve stack and reports, per target, what was scraped (row count + a small
     sample) and — when it produced nothing — the specific reason (undecoded body
     vs JS shell vs schema mismatch vs a dead URL), never a generic "parser miss".
+
+    Also runs the discovery intake (email + blogs + YouTube) and persists rows to
+    ``discovered_charts.json`` — on demand, no background daemon required.
 
     Role-aware: a PRIMARY failing is a hard `fail` (its program lost coverage); a
     FALLBACK failing is only a `warn` (a working primary already covers it), so
@@ -216,8 +243,77 @@ def scrape_live(offline: bool = False) -> LiveScrapeResponse:
     a smoke check); the default `offline=false` performs a REAL network scrape
     and can take tens of seconds.
     """
-    report = run_live_scrape(offline=offline)
-    return LiveScrapeResponse(**report.to_dict())
+    repo = build_repository(config)
+    stores = build_stores(config, repo)
+    try:
+        discovery = run_discovery_intake(
+            config=config,
+            offline=offline,
+            repo=repo,
+            cache=stores.cache,
+            lock=stores.lock,
+        )
+    finally:
+        stores.close()
+        repo.close()
+    report = run_live_scrape(offline=offline, knowledge_dir=config.knowledge_dir)
+    payload = report.to_dict()
+    payload["discovery"] = discovery.to_dict()
+    return LiveScrapeResponse(**payload)
+
+
+@app.get("/scrape/daily", response_model=DailyScrapeResponse)
+def scrape_daily(config: Config = Depends(get_config)) -> DailyScrapeResponse:
+    """Return the last persisted daily scrape snapshot (Redis Cloud or file)."""
+    repo = build_repository(config)
+    stores = build_stores(config, repo)
+    try:
+        doc = load_daily_snapshot(
+            knowledge_dir=config.knowledge_dir,
+            cache=stores.cache,
+            backend=stores.backend,
+        )
+    finally:
+        stores.close()
+        repo.close()
+    if doc is None:
+        return DailyScrapeResponse(found=False)
+    discovery_raw = doc.get("discovery")
+    discovery = (
+        LiveScrapeDiscoveryResult(**discovery_raw) if isinstance(discovery_raw, dict) else None
+    )
+    return DailyScrapeResponse(
+        found=True,
+        storage=doc.get("storage"),
+        storage_backend=doc.get("storage_backend"),
+        completed_at=doc.get("completed_at"),
+        stored_at=doc.get("stored_at"),
+        discovery=discovery,
+        scrape=doc.get("scrape"),
+    )
+
+
+@app.post("/scrape/daily", response_model=DailyScrapeResponse)
+def scrape_daily_run(config: Config = Depends(get_config)) -> DailyScrapeResponse:
+    """Run the daily scrape now and persist to Redis Cloud (debug / manual trigger)."""
+    repo = build_repository(config)
+    try:
+        doc = run_daily_scrape(config=config, repo=repo)
+    finally:
+        repo.close()
+    discovery_raw = doc.get("discovery")
+    discovery = (
+        LiveScrapeDiscoveryResult(**discovery_raw) if isinstance(discovery_raw, dict) else None
+    )
+    return DailyScrapeResponse(
+        found=True,
+        storage=doc.get("storage"),
+        storage_backend=doc.get("storage_backend"),
+        completed_at=doc.get("completed_at"),
+        stored_at=doc.get("stored_at"),
+        discovery=discovery,
+        scrape=doc.get("scrape"),
+    )
 
 
 @app.get("/health")

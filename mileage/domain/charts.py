@@ -26,6 +26,32 @@ def region_of(airport: str, region_map: dict[str, str]) -> Optional[str]:
     return region_map.get(airport.upper())
 
 
+def route_region_tokens(
+    program: str,
+    route: Route,
+    region_map: dict[str, str],
+    program_zones: Optional[dict[str, dict[str, int]]] = None,
+) -> tuple[Optional[str], Optional[str]]:
+    """Map a route's airports to chart band tokens.
+
+    When ``program_zones`` lists a zone index for an airport, the token becomes
+    ``{program}_zone_{n}`` so zone-matrix PDF rows (KrisFlyer zones 1–13) resolve
+    without collapsing distinct zones that share a canonical region. Otherwise
+    falls back to the global ``region_map`` (LifeMiles / Aeroplan region pairs).
+    """
+    zones_raw = (program_zones or {}).get(program) or {}
+    zones = {str(ap).upper(): int(z) for ap, z in zones_raw.items()}
+
+    def _token(airport: str) -> Optional[str]:
+        ap = airport.upper()
+        zone = zones.get(ap)
+        if zone is not None:
+            return f"{program}_zone_{zone}"
+        return region_map.get(ap)
+
+    return _token(route.origin), _token(route.dest)
+
+
 def _bands_match(band_regions: list[str], a: str, b: str) -> bool:
     """A band matches a route if its unordered region pair equals {a, b}."""
     return sorted(x.lower() for x in band_regions) == sorted([a, b])
@@ -53,6 +79,7 @@ def lookup_award_miles(
     region_map: dict[str, str],
     *,
     airport_coords: Optional[dict[str, tuple[float, float]]] = None,
+    program_zones: Optional[dict[str, dict[str, int]]] = None,
 ) -> Optional[ChartHit]:
     """Resolve `route` against one program's chart. None if unresolvable.
 
@@ -99,48 +126,60 @@ def lookup_award_miles(
             flags.append("rt_to_ow_normalized")
         return ChartHit(program=program, miles=miles, flags=flags)
 
-    r_o = region_of(route.origin, region_map)
-    r_d = region_of(route.dest, region_map)
-    if r_o is None or r_d is None:
-        return None
+    r_o, r_d = route_region_tokens(
+        program, route, region_map, program_zones=program_zones
+    )
+    token_pairs: list[tuple[Optional[str], Optional[str]]] = [(r_o, r_d)]
+    # Discovery prose emits canonical region pairs (north_america/europe); zone-
+    # matrix charts emit turkish_zone_N. Retry with region_map when zone tokens
+    # miss so both shapes coexist for the same program.
+    if (program_zones or {}).get(program):
+        ro2, rd2 = region_map.get(o), region_map.get(d)
+        if ro2 and rd2 and (ro2, rd2) != (r_o, r_d):
+            token_pairs.append((ro2, rd2))
 
     gcm: Optional[float] = None
-    for band in program_chart.get("bands", []):
-        if band.get("airports"):
-            continue  # exact-airport bands were handled above
-        regions = band.get("regions", [])
-        if len(regions) != 2 or not _bands_match(regions, r_o, r_d):
+    best: Optional[ChartHit] = None
+    for r_o, r_d in token_pairs:
+        if r_o is None or r_d is None:
             continue
-        # Distance-banded charts: the geography matched, but the band only
-        # applies to a great-circle range. Compute the route distance once and
-        # skip bands whose [lo, hi] the route falls outside.
-        dist = band.get("distance")
-        if dist:
-            if airport_coords is None:
+        for band in program_chart.get("bands", []):
+            if band.get("airports"):
+                continue  # exact-airport bands were handled above
+            regions = band.get("regions", [])
+            if len(regions) != 2 or not _bands_match(regions, r_o, r_d):
                 continue
-            co = airport_coords.get(route.origin.upper())
-            cd = airport_coords.get(route.dest.upper())
-            if not (co and cd):
+            # Distance-banded charts: the geography matched, but the band only
+            # applies to a great-circle range. Compute the route distance once and
+            # skip bands whose [lo, hi] the route falls outside.
+            dist = band.get("distance")
+            if dist:
+                if airport_coords is None:
+                    continue
+                co = airport_coords.get(route.origin.upper())
+                cd = airport_coords.get(route.dest.upper())
+                if not (co and cd):
+                    continue
+                if gcm is None:
+                    gcm = great_circle_miles(co, cd)
+                lo, hi = float(dist[0]), float(dist[1])
+                if not (lo <= gcm <= hi):
+                    continue
+            miles_map = band.get("miles", {})
+            raw = miles_map.get(cabin_key)
+            if raw is None:
                 continue
-            if gcm is None:
-                gcm = great_circle_miles(co, cd)
-            lo, hi = float(dist[0]), float(dist[1])
-            if not (lo <= gcm <= hi):
-                continue
-        miles_map = band.get("miles", {})
-        raw = miles_map.get(cabin_key)
-        if raw is None:
-            # Geography (and distance) matched but not this cabin: keep scanning;
-            # another band for the same pair may carry it (distance charts split
-            # one zone pair across many cabin/distance rows).
-            continue
-        flags: list[str] = []
-        miles = int(raw)
-        if band.get("roundtrip", False):
-            miles = math.ceil(miles / 2)
-            flags.append("rt_to_ow_normalized")
-        return ChartHit(program=program, miles=miles, flags=flags)
-    return None
+            flags: list[str] = []
+            miles = int(raw)
+            if band.get("roundtrip", False):
+                miles = math.ceil(miles / 2)
+                flags.append("rt_to_ow_normalized")
+            hit = ChartHit(program=program, miles=miles, flags=flags)
+            if dist:
+                return hit  # distance bands are disjoint ranges — first match wins
+            if best is None or hit.miles < best.miles:
+                best = hit  # duplicate region pairs (e.g. Saver + Advantage PDF rows)
+    return best
 
 
 def cabins_available(program_chart: dict) -> set[Cabin]:
