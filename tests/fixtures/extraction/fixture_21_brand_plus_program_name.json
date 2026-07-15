@@ -1,0 +1,17 @@
+{
+  "source_hint": "email:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "messy",
+  "notes": "Brand name and program name combined in one phrase ('Air Canada's Aeroplan') rather than either alone.",
+  "document": "Air Canada's Aeroplan continues to price premium economy from Europe to North America at 45,000 miles one-way, a nice middle ground between economy and business.",
+  "expected_rows": [
+    {
+      "program": "aeroplan",
+      "region_a": "europe",
+      "region_b": "north_america",
+      "cabin": "premium_economy",
+      "miles": 45000,
+      "roundtrip": false
+    }
+  ]
+}

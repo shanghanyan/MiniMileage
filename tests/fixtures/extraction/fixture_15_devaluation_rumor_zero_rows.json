@@ -1,0 +1,8 @@
+{
+  "source_hint": "email:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "messy",
+  "notes": "Pure devaluation chatter with no published number at all \u2014 correct output is zero rows, a precision test.",
+  "document": "Rumor has it Turkish Miles&Smiles will devalue its Star Alliance award chart sometime next year, though no official announcement or new chart has been published, and current pricing remains unchanged from last quarter.",
+  "expected_rows": []
+}

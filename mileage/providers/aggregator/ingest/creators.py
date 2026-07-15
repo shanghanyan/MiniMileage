@@ -294,9 +294,9 @@ def run_blog_intake(
 ) -> IntakeResult:
     """Run the blog intake across every creator with a blog_rss."""
     if extractor is None:
-        from ..extract import DeterministicExtractor
+        from ..extract import build_extractor
 
-        extractor = DeterministicExtractor()
+        extractor = build_extractor(config)
     if creators is None:
         creators = load_creators(config.knowledge_dir / "creators.yaml")
 

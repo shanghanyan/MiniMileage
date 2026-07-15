@@ -1,0 +1,25 @@
+{
+  "source_hint": "blog:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "messy",
+  "notes": "middle_east and africa region coverage (both new mappings as of the 2026-07-08 regions.py expansion) in a two-region, same-program sentence.",
+  "document": "Turkish, as a Star Alliance carrier based in Istanbul, prices business class from North America to the Middle East at 55,000 miles one-way, and separately to Africa at 65,000 miles one-way for select routes.",
+  "expected_rows": [
+    {
+      "program": "turkish",
+      "region_a": "north_america",
+      "region_b": "middle_east",
+      "cabin": "business",
+      "miles": 55000,
+      "roundtrip": false
+    },
+    {
+      "program": "turkish",
+      "region_a": "north_america",
+      "region_b": "africa",
+      "cabin": "business",
+      "miles": 65000,
+      "roundtrip": false
+    }
+  ]
+}

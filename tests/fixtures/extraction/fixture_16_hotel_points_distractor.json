@@ -1,0 +1,17 @@
+{
+  "source_hint": "blog:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "messy",
+  "notes": "A hotel-points promotion (not a modeled program) sits beside a real airline row; only the airline row should extract.",
+  "document": "Marriott Bonvoy is running a promotion at 35,000 points per night at several Category 4 hotels this month. Meanwhile, Aeroplan continues to price economy class from North America to Europe at 32,000 miles one-way.",
+  "expected_rows": [
+    {
+      "program": "aeroplan",
+      "region_a": "north_america",
+      "region_b": "europe",
+      "cabin": "economy",
+      "miles": 32000,
+      "roundtrip": false
+    }
+  ]
+}

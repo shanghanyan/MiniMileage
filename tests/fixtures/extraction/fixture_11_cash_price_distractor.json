@@ -1,0 +1,17 @@
+{
+  "source_hint": "blog:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "messy",
+  "notes": "Precision risk: a dollar cash fare ($4,150) falls inside the plausible award-miles range (3,000-400,000) and sits right next to the real award price in the same sentence.",
+  "document": "A comparable cash fare runs about $4,150 round-trip, but Avianca LifeMiles prices the same business-class North America to Europe route at 63,000 miles one-way.",
+  "expected_rows": [
+    {
+      "program": "lifemiles",
+      "region_a": "north_america",
+      "region_b": "europe",
+      "cabin": "business",
+      "miles": 63000,
+      "roundtrip": false
+    }
+  ]
+}

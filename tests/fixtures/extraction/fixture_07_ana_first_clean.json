@@ -1,0 +1,17 @@
+{
+  "source_hint": "email:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "clean",
+  "notes": "ANA first-class, a different route than fixture_04, round-trip phrasing.",
+  "document": "ANA Mileage Club continues to price first class from Europe to North Asia at 190,000 miles round-trip, among the most aspirational redemptions in the Star Alliance chart.",
+  "expected_rows": [
+    {
+      "program": "ana",
+      "region_a": "europe",
+      "region_b": "north_asia",
+      "cabin": "first",
+      "miles": 190000,
+      "roundtrip": true
+    }
+  ]
+}

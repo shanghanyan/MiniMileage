@@ -207,9 +207,9 @@ def run_transcript_intake(
 ) -> IntakeResult:
     """Run the transcript intake across every creator with a channel_id."""
     if extractor is None:
-        from ..extract import DeterministicExtractor
+        from ..extract import build_extractor
 
-        extractor = DeterministicExtractor()
+        extractor = build_extractor(config)
     if caption_fetcher is None:
         caption_fetcher = default_caption_fetcher
     if creators is None:

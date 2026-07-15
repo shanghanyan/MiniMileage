@@ -213,9 +213,9 @@ def run_discovery(
     is trivially testable.
     """
     if extractor is None:
-        from ..extract import DeterministicExtractor
+        from ..extract import build_extractor
 
-        extractor = DeterministicExtractor()
+        extractor = build_extractor(config)
 
     documents, used_fixtures = fetch_email_documents(
         config, fixture_dir=fixture_dir, limit=limit

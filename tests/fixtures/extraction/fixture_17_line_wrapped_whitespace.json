@@ -1,0 +1,17 @@
+{
+  "source_hint": "email:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "messy",
+  "notes": "Irregular line breaks/whitespace splitting the program name, cabin, and region across several lines \u2014 common in copy-pasted newsletter HTML.",
+  "document": "Turkish   Miles&Smiles\nbusiness class\nfrom North America\nto Europe\nis priced at 50,000 miles\none-way this week.",
+  "expected_rows": [
+    {
+      "program": "turkish",
+      "region_a": "north_america",
+      "region_b": "europe",
+      "cabin": "business",
+      "miles": 50000,
+      "roundtrip": false
+    }
+  ]
+}

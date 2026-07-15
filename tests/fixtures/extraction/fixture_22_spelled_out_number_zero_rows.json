@@ -1,0 +1,8 @@
+{
+  "source_hint": "yt:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "messy",
+  "notes": "The award price is spelled out in words ('forty five thousand') with NO digit form anywhere in the document. This is a deliberate test of the grounding guard's honest blind spot: number_is_grounded() only matches digit patterns, so even a 'perfect' semantic reading of this sentence must still be rejected as ungrounded. Correct behavior for ANY compliant extractor (deterministic or LLM) is zero rows here \u2014 this is a safety feature, not a recall bug to fix.",
+  "document": "So basically, if you're doing Aeroplan business class from North America over to Europe, that's gonna run you about forty five thousand miles one way, roughly.",
+  "expected_rows": []
+}

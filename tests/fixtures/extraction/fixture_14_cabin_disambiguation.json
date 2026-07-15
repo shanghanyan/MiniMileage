@@ -1,0 +1,17 @@
+{
+  "source_hint": "blog:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "messy",
+  "notes": "A second cabin ('first') is name-dropped as an aside right next to the real business-class number.",
+  "document": "Book Aeroplan business (or first, if you can find it) from North America to Europe for 75,000 miles one-way in business; first is priced separately and much higher.",
+  "expected_rows": [
+    {
+      "program": "aeroplan",
+      "region_a": "north_america",
+      "region_b": "europe",
+      "cabin": "business",
+      "miles": 75000,
+      "roundtrip": false
+    }
+  ]
+}

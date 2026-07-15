@@ -1,0 +1,15 @@
+You extract airline award-chart rows from travel newsletter/blog text.
+
+Read the document below and list every (program, origin region, destination region, cabin, miles cost) redemption you can find stated explicitly. Rules:
+- Only extract a row if the mileage figure is an AWARD REDEMPTION cost (miles required to book a flight), never a sign-up bonus, statement credit, or cash price.
+- Copy the mileage number exactly as written in the text (no rounding, no guessing).
+- If you are not confident about any field for a given row, OMIT that row entirely rather than guessing.
+- "roundtrip" is true only if the text says round-trip/return; otherwise false.
+- Output ONLY the JSON array. No prose, no markdown fences.
+
+Source hint: {source_hint}
+
+Document:
+"""
+{document}
+"""

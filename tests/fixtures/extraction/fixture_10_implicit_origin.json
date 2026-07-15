@@ -1,0 +1,17 @@
+{
+  "source_hint": "blog:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "messy",
+  "notes": "MEASURED, CORRECTED NOTE (2026-07-08): originally predicted this would pass via the single-hint fallback; it actually scores 0/1. Root cause verified directly: 'Istanbul' appears BEFORE the number, but the nearest program mention ('Turkish') appears AFTER the number, so _row_for_number's clause is sliced starting from the program's position onward (text[start:pos+60]) \u2014 which discards the earlier 'Istanbul' region hint entirely, leaving the clause with no region hint at all. Real, reproducible gap: sentence shape '<region hint> ... <number> <program mention>' loses the region whenever the program is named after the number. See Cursor-LLM-Extractor-Task.md.",
+  "document": "Flying to Istanbul in business only costs 45,000 Turkish Miles&Smiles miles one-way \u2014 no need to overthink the origin.",
+  "expected_rows": [
+    {
+      "program": "turkish",
+      "region_a": "north_america",
+      "region_b": "europe",
+      "cabin": "business",
+      "miles": 45000,
+      "roundtrip": false
+    }
+  ]
+}

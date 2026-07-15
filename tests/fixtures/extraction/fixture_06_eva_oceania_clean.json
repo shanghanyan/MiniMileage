@@ -1,0 +1,17 @@
+{
+  "source_hint": "blog:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "clean",
+  "notes": "EVA + oceania region coverage (oceania mapping is new as of the 2026-07-08 regions.py expansion).",
+  "document": "EVA Air's Infinity MileageLands chart still shows economy class from North America to Oceania priced at 100,000 miles round-trip via Star Alliance partners, covering both Australia and New Zealand.",
+  "expected_rows": [
+    {
+      "program": "eva",
+      "region_a": "north_america",
+      "region_b": "oceania",
+      "cabin": "economy",
+      "miles": 100000,
+      "roundtrip": true
+    }
+  ]
+}

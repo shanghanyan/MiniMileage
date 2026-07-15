@@ -1,0 +1,50 @@
+# GBNF grammar for the local LLM extractor (Cursor-Mileage-Plan §6.2).
+#
+# Constrains decoding so the model's output CANNOT escape this schema — no
+# retry-on-parse-failure needed, the decoder physically cannot emit anything
+# else. Mirrors `RawChartRow` exactly (program, region_a<-from, region_b<-to,
+# cabin, miles, roundtrip), so a valid parse drops straight into
+# `_build_charts()` with no new parsing surface (see local_extractor.py).
+#
+# This file is the canonical schema definition for BOTH serving paths:
+#   - llama.cpp / llama-cpp-python: pass this file's contents directly as the
+#     `grammar` argument (LlamaGrammar.from_string / --grammar-file).
+#   - Ollama: as of writing, Ollama's HTTP API takes a JSON Schema via its
+#     `format` field rather than a raw .gbnf string, so local_extractor.py's
+#     OllamaExtractor mirrors this SAME schema as a JSON Schema dict inline
+#     rather than loading this file at runtime. Keep the two in sync if this
+#     file changes. If/when Ollama accepts GBNF directly, this file becomes
+#     the single source of truth for both backends — that's the point of
+#     keeping it checked in now rather than only inlining the JSON Schema.
+#
+# `cabin` is constrained to the four canonical values domain/models.py and
+# parse.py's `_CABINS` already accept — an out-of-vocabulary cabin is a schema
+# violation, not a row the resolver would understand anyway.
+#
+# NOTE: `from`/`to` are free-text region/city/country strings as they appear
+# in the source prose (e.g. "Turkey", "North America", "LAX") — NOT
+# constrained to an enum here, because the source text's own vocabulary can't
+# be predicted ahead of time. They are canonicalized after generation via the
+# SAME `regions.canonicalize_region()` every deterministic parser already
+# uses (see local_extractor.py); a region that doesn't canonicalize is
+# dropped, never guessed — identical contract to every other intake.
+
+root    ::= "[" ws (row ("," ws row)*)? ws "]"
+
+row     ::= "{" ws
+            "\"program\"" ws ":" ws str "," ws
+            "\"from\"" ws ":" ws str "," ws
+            "\"to\"" ws ":" ws str "," ws
+            "\"cabin\"" ws ":" ws cabin "," ws
+            "\"miles\"" ws ":" ws int "," ws
+            "\"roundtrip\"" ws ":" ws bool ws
+            "}"
+
+cabin   ::= "\"economy\"" | "\"premium_economy\"" | "\"business\"" | "\"first\""
+bool    ::= "true" | "false"
+int     ::= [0-9]{1,7}
+str     ::= "\"" char* "\""
+char    ::= [^"\\] | "\\" escape
+escape  ::= ["\\/bfnrt] | "u" hex hex hex hex
+hex     ::= [0-9a-fA-F]
+ws      ::= [ \t\n\r]*

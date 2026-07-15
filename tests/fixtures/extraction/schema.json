@@ -1,0 +1,82 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "mileage://extraction-fixture",
+  "title": "Mileage discovery-extractor eval fixture",
+  "description": "One (document -> expected RawChartRow[]) pair for mileage/extraction_eval.py. See README.md in this directory for the synthetic-vs-real caveat.",
+  "type": "object",
+  "required": ["source_hint", "document", "expected_rows"],
+  "additionalProperties": false,
+  "properties": {
+    "source_hint": {
+      "type": "string",
+      "description": "Provenance tag matching the real intake naming convention, e.g. 'email:dailydrop', 'blog:10xtravel', 'yt:lets_get_to_the_points'. Use '*:synthetic_bootstrap' or '*:synthetic_messy' for hand-written fixtures."
+    },
+    "document": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The raw text/HTML the extractor sees, exactly as a real intake would hand it over (email body, blog article text, transcript text)."
+    },
+    "synthetic": {
+      "type": "boolean",
+      "description": "true if this fixture was hand-written rather than pulled from a real source and hand-corrected. Every fixture shipped as of 2026-07-08 is true. Flip to false only once a fixture's document+expected_rows both came from a real message/post/transcript."
+    },
+    "difficulty": {
+      "type": "string",
+      "enum": ["clean", "messy"],
+      "description": "'clean' = a single, clearly-stated redemption sentence (tests basic plumbing). 'messy' = the kind of prose the deterministic extractor is expected to struggle with: multiple items in one paragraph, line-wrapped/bulleted lists, ambiguous or implicit origin, mixed units, distractor numbers, devaluation chatter, nested asides. This is the field that matters for judging whether an LLM backend earns its keep over the deterministic one (Cursor-Mileage-Plan.md §6.3)."
+    },
+    "notes": {
+      "type": "string",
+      "description": "What this fixture is specifically testing, e.g. 'bonus-vs-award-price distinction' or 'implicit origin inference'. Optional but strongly encouraged — a fixture with no notes is hard to triage when it starts failing."
+    },
+    "expected_rows": {
+      "type": "array",
+      "description": "Every row a correct extractor should produce from `document`. An empty array is valid (e.g. a fixture that's ALL distractor/devaluation text with no actual award price) and is itself a useful precision test.",
+      "items": { "$ref": "#/definitions/expected_row" }
+    }
+  },
+  "definitions": {
+    "expected_row": {
+      "type": "object",
+      "required": ["program", "region_a", "region_b", "cabin", "miles"],
+      "additionalProperties": false,
+      "properties": {
+        "program": {
+          "type": "string",
+          "enum": ["aeroplan", "turkish", "lifemiles", "krisflyer", "ana", "eva"],
+          "description": "Must match a knowledge/ratios.yaml or knowledge/charts.yaml program id, not a brand name (\"avianca\" -> \"lifemiles\", \"air canada\" -> \"aeroplan\", etc. — canonicalization is the extractor's job, not the fixture's)."
+        },
+        "region_a": { "$ref": "#/definitions/region_token" },
+        "region_b": { "$ref": "#/definitions/region_token" },
+        "cabin": {
+          "type": "string",
+          "enum": ["economy", "premium_economy", "business", "first"]
+        },
+        "miles": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Must appear literally in `document` (comma/space/\"k\"-insensitive) — an expected_row whose miles isn't grounded in its own document is a broken fixture, not a hard test case."
+        },
+        "roundtrip": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "region_token": {
+      "type": "string",
+      "description": "A canonical region token (regions.canonicalize_region() output / charts.yaml::region_map value), NOT raw prose — see charts.yaml region_map for the 9 buckets.",
+      "enum": [
+        "north_america",
+        "europe",
+        "north_asia",
+        "southeast_asia",
+        "south_asia",
+        "middle_east",
+        "oceania",
+        "south_america",
+        "africa"
+      ]
+    }
+  }
+}

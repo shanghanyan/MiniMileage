@@ -1,5 +1,5 @@
-# Capital One transferable-miles ratios (Layer 4).
-# ratio = partner points received per 1 Capital One mile.
+# Transferable-currency ratios (Layer 4).
+# ratio = partner points received per 1 unit of the source currency.
 #
 # LOAD-BEARING DOMAIN FACT (Cursor-Mileage-Plan.md §0):
 #   Capital One does NOT transfer directly to United MileagePlus.
@@ -18,5 +18,85 @@ partners:
   turkish: 1.0        # Turkish Miles&Smiles (Star Alliance)
   lifemiles: 1.0      # Avianca LifeMiles (Star Alliance)
   krisflyer: 1.0      # Singapore KrisFlyer (Star Alliance)
-  eva: 1.0            # EVA Air Infinity MileageLands (Star Alliance)
+  eva: 0.75           # EVA Air Infinity MileageLands — ratio CORRECTED 2026-07-08.
+                      # Was hardcoded 1.0; Capital One actually transfers to EVA at
+                      # 2:1.5 (= 1:0.75), confirmed against
+                      # https://awardtravelfinder.com/credit-card-transfers/capital-one-miles
+                      # (verified Jul 08, 2026) and corroborated by general search
+                      # results citing the same 2:1.5 ratio. The official
+                      # capitalone.com transfer-partners page is JS-rendered and
+                      # could not be fetched directly to cross-check; treat this as
+                      # secondary-sourced (not the §7 authoritative short-circuit)
+                      # until confirmed against the official page.
   # united: intentionally absent — see note above.
+
+# --- Additional transferable currencies (Phase 7 data-only expansion, §13) ---
+# Each block is the same shape as the capital_one block above and is loaded by
+# CuratedProvider._transfer_ratios(), filtered by Query.currency — this is a
+# pure data addition, no domain/ change (from_currency was already a free
+# string end-to-end; see cli.py --currency, api/schemas.py). Only partners that
+# already have a chart source in sources.yaml/charts.yaml are worth adding here;
+# a ratio with no chart on the other end is a dead end either way (see the
+# `eva` note above and the README "Built but dormant" section).
+#
+# Ratios below are sourced from secondary aggregators (Award Travel Finder,
+# The Points Guy, Bilt's own support page) because the official issuer transfer
+# pages are JS-rendered and could not be fetched directly in this session.
+# Re-verify against the official issuer page before treating any of these as
+# authoritative (§7) rather than single-source.
+currencies:
+  - from_currency: amex_mr
+    source: "Award Travel Finder — Amex Membership Rewards transfer partners"
+    url: https://awardtravelfinder.com/credit-card-transfers/amex-membership-rewards
+    trust: 0.8
+    updated_at: "2026-07-03"
+    partners:
+      aeroplan: 1.0     # Air Canada Aeroplan
+      ana: 1.0          # ANA Mileage Club — Amex is the ONLY one of these four
+                        # currencies that reaches ANA; capital_one/chase/citi/bilt
+                        # do not transfer to ANA, so this is what makes the
+                        # already-scraped ANA chart (atf-ana-chart) reachable.
+      lifemiles: 1.0    # Avianca LifeMiles
+      krisflyer: 1.0    # Singapore KrisFlyer
+      # NOT partners (confirmed absent from Amex's 17-airline list, Jul 2026):
+      # turkish, eva.
+
+  - from_currency: chase_ur
+    source: "The Points Guy — Chase Ultimate Rewards transfer partners"
+    url: https://thepointsguy.com/loyalty-programs/chase-ultimate-rewards-transfer-partners/
+    trust: 0.85
+    updated_at: "2026-06-16"
+    partners:
+      aeroplan: 1.0     # Air Canada Aeroplan
+      krisflyer: 1.0    # Singapore KrisFlyer
+      # NOT partners (confirmed absent from Chase's 10-airline list, Jun 2026):
+      # turkish, lifemiles, ana, eva.
+
+  - from_currency: citi_typ
+    source: "Award Travel Finder — Citi ThankYou Points transfer partners"
+    url: https://awardtravelfinder.com/credit-card-transfers/citi-thankyou-points
+    trust: 0.75
+    updated_at: "2026-07-08"
+    partners:
+      lifemiles: 1.0    # Avianca LifeMiles
+      krisflyer: 1.0    # Singapore KrisFlyer
+      turkish: 1.0      # Turkish Miles&Smiles
+      eva: 1.0          # EVA Air Infinity MileageLands
+      # NOTE: the 1:1 ratio above is Citi's TOP-TIER card rate (Strata Premier /
+      # Strata Elite). Lower-tier ThankYou cards transfer at a reduced ratio
+      # (reports put it around 1:0.7) — this file, like the capital_one block
+      # above, does not yet model per-card variation. Treat these four ratios
+      # as a best-case ceiling, not guaranteed for every Citi card.
+      # NOT partners: aeroplan, ana.
+
+  - from_currency: bilt
+    source: "Bilt Rewards — official transfer partners list"
+    url: https://support.biltrewards.com/hc/en-us/articles/19086448638989-Bilt-s-Transfer-Partners
+    trust: 0.9
+    updated_at: "2026-06-22"
+    partners:
+      lifemiles: 1.0    # Avianca LifeMiles
+      turkish: 1.0      # Turkish Airlines Miles&Smiles
+      aeroplan: 1.0     # Air Canada Aeroplan
+      # NOT partners (confirmed absent from Bilt's official 19-airline list):
+      # krisflyer, ana, eva.

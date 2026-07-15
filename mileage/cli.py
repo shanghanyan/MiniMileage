@@ -92,7 +92,7 @@ def run_quote(
             ]
             obs.set_output(s, f"{len(fare_quotes)} fare quote(s)")
 
-        programs = partner_programs(config)
+        programs = partner_programs(config, currency)
 
         # L4 ratios + chart-derived award costs.
         with obs.span("gather:charts", obs.KIND_CHAIN, input_value=route.key()) as s:

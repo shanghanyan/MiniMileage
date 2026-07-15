@@ -36,7 +36,12 @@ def test_inventory_lists_discovery_and_providers() -> None:
     assert "aviationstack" in names
     assert "aggregator" in names
 
-    assert inv.summary["chart_targets"] == 13
+    # Read from the loader rather than hardcoding a count that drifts every
+    # time a source is added (15 as of 2026-07-08: +10x-eva-chart,
+    # +10x-krisflyer-chart — see knowledge/sources.yaml).
+    from mileage.providers.aggregator.sources import load_targets
+
+    assert inv.summary["chart_targets"] == len(load_targets(config.sources_path))
     assert inv.summary["discovery_channels"] == 1 + 7 + 6
 
 

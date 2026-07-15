@@ -1,9 +1,11 @@
 """Path inventory — every scrape/discovery channel wired in the system (§6).
 
-The Live Scrape page walks only ``sources.yaml`` (13 chart targets). This
-module surfaces the rest: discovery intakes (email, blog RSS, YouTube
-transcripts) and federated providers (Amadeus, Travelpayouts, seats.aero, …)
-so the UI can show the full picture without running a live scrape.
+The Live Scrape page walks only ``sources.yaml`` (chart targets — count grows
+as sources are added; read ``len(load_targets(...))`` rather than trusting a
+hardcoded number here). This module surfaces the rest: discovery intakes
+(email, blog RSS, YouTube transcripts) and federated providers (Amadeus,
+Travelpayouts, seats.aero, …) so the UI can show the full picture without
+running a live scrape.
 """
 
 from __future__ import annotations

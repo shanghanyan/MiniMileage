@@ -1,0 +1,8 @@
+{
+  "source_hint": "email:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "messy",
+  "notes": "A routine booking-confirmation email with no chart data at all \u2014 realistic negative control for the live inbox intake.",
+  "document": "Your booking confirmation number is XK7P29Q4. Departure: 14 Jan 2027, flight AC851, seat 14C. Please arrive at the airport at least 3 hours before departure for international flights.",
+  "expected_rows": []
+}

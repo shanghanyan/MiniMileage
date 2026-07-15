@@ -1,0 +1,17 @@
+{
+  "source_hint": "email:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "messy",
+  "notes": "Number written as '27k' shorthand rather than '27,000'.",
+  "document": "Turkish's off-peak economy award from North America to Europe is holding steady at 27k miles one-way, still one of the cheapest ways across the pond.",
+  "expected_rows": [
+    {
+      "program": "turkish",
+      "region_a": "north_america",
+      "region_b": "europe",
+      "cabin": "economy",
+      "miles": 27000,
+      "roundtrip": false
+    }
+  ]
+}

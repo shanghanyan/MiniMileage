@@ -1,0 +1,17 @@
+{
+  "source_hint": "email:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "messy",
+  "notes": "A historical/stale price (last year's 55,000) sits in the same sentence as the current price (60,000) for the same program/route/cabin. Deterministic.py has no temporal reasoning, so it may extract BOTH numbers as separate rows with an identical key except miles \u2014 expect a possible extra/false-positive row here, not necessarily a clean match.",
+  "document": "LifeMiles currently prices business class from North America to Europe at 60,000 miles one-way; last year's chart had it at 55,000 miles for comparison.",
+  "expected_rows": [
+    {
+      "program": "lifemiles",
+      "region_a": "north_america",
+      "region_b": "europe",
+      "cabin": "business",
+      "miles": 60000,
+      "roundtrip": false
+    }
+  ]
+}

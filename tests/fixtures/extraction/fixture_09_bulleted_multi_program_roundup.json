@@ -1,0 +1,41 @@
+{
+  "source_hint": "email:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "messy",
+  "notes": "Cross-item bleed stress test: four different programs/routes/cabins in one bulleted roundup. A window-based extractor anchored on the wrong program mention could blend adjacent bullets' fields.",
+  "document": "This week's roundup:\n- Turkish: business class North America to Europe, 45,000 miles one-way.\n- LifeMiles: economy class North America to South America, 30,000 miles one-way.\n- Aeroplan: business class Europe to North Asia, 75,000 miles one-way.\n- KrisFlyer: first class North America to Southeast Asia, 140,000 miles one-way.",
+  "expected_rows": [
+    {
+      "program": "turkish",
+      "region_a": "north_america",
+      "region_b": "europe",
+      "cabin": "business",
+      "miles": 45000,
+      "roundtrip": false
+    },
+    {
+      "program": "lifemiles",
+      "region_a": "north_america",
+      "region_b": "south_america",
+      "cabin": "economy",
+      "miles": 30000,
+      "roundtrip": false
+    },
+    {
+      "program": "aeroplan",
+      "region_a": "europe",
+      "region_b": "north_asia",
+      "cabin": "business",
+      "miles": 75000,
+      "roundtrip": false
+    },
+    {
+      "program": "krisflyer",
+      "region_a": "north_america",
+      "region_b": "southeast_asia",
+      "cabin": "first",
+      "miles": 140000,
+      "roundtrip": false
+    }
+  ]
+}

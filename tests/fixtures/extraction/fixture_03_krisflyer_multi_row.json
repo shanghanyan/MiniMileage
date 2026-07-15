@@ -1,0 +1,25 @@
+{
+  "source_hint": "yt:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "clean",
+  "notes": "Multi-row recall test: two cabins, two prices, same route, in one short paragraph. Regression fixture for the 2026-07-08 'asia' substring bug (was scoring 0/2 before the deterministic.py region-matching fix).",
+  "document": "Singapore KrisFlyer transcript notes: flying North America to Southeast Asia, Saver economy runs 40,000 miles one-way, while business class jumps to 90,000 miles one-way for the same route. Both are bookable with Star Alliance partners if Singapore Airlines itself shows no space.",
+  "expected_rows": [
+    {
+      "program": "krisflyer",
+      "region_a": "north_america",
+      "region_b": "southeast_asia",
+      "cabin": "economy",
+      "miles": 40000,
+      "roundtrip": false
+    },
+    {
+      "program": "krisflyer",
+      "region_a": "north_america",
+      "region_b": "southeast_asia",
+      "cabin": "business",
+      "miles": 90000,
+      "roundtrip": false
+    }
+  ]
+}

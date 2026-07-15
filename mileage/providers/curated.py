@@ -79,30 +79,40 @@ class CuratedProvider:
 
     # --- ratios ------------------------------------------------------------ #
     def _transfer_ratios(self, q: Query) -> list[TransferRatio]:
+        """Ratios for every configured currency, filtered by `q.currency`.
+
+        `ratios.yaml` holds one top-level currency block (capital_one, kept at
+        the top level for backward compatibility) plus an optional `currencies:`
+        list of additional blocks (§13 Phase 7 data expansion) — each block is
+        the same shape. Adding a currency is purely a data change here; nothing
+        else in `domain/`/`verify/` cares which currency a ratio came from.
+        """
         if not self._ratios:
             return []
-        from_currency = self._ratios.get("from_currency", "capital_one")
-        if q.currency and q.currency != from_currency:
-            return []
-        prov = Provenance(
-            source_name=self._ratios.get("source", "curated ratios"),
-            source_url=self._ratios.get("url"),
-            trust=float(self._ratios.get("trust", 1.0)),
-            source_updated_at=_parse_date(self._ratios.get("updated_at")),
-        )
+        blocks = [self._ratios, *(self._ratios.get("currencies") or [])]
         out: list[TransferRatio] = []
-        for program, ratio in (self._ratios.get("partners") or {}).items():
-            if q.programs and program not in q.programs:
+        for block in blocks:
+            from_currency = block.get("from_currency", "capital_one")
+            if q.currency and q.currency != from_currency:
                 continue
-            out.append(
-                TransferRatio(
-                    from_currency=from_currency,
-                    to_program=program,
-                    ratio=float(ratio),
-                    provenance=prov,
-                    confidence=float(self._ratios.get("trust", 1.0)),
-                )
+            prov = Provenance(
+                source_name=block.get("source", "curated ratios"),
+                source_url=block.get("url"),
+                trust=float(block.get("trust", 1.0)),
+                source_updated_at=_parse_date(block.get("updated_at")),
             )
+            for program, ratio in (block.get("partners") or {}).items():
+                if q.programs and program not in q.programs:
+                    continue
+                out.append(
+                    TransferRatio(
+                        from_currency=from_currency,
+                        to_program=program,
+                        ratio=float(ratio),
+                        provenance=prov,
+                        confidence=float(block.get("trust", 1.0)),
+                    )
+                )
         return out
 
     # --- award chart costs ------------------------------------------------- #

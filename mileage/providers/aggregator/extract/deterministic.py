@@ -23,25 +23,19 @@ from typing import List, Optional
 
 from ..parse import RawChartRow, _CABINS
 from .grounding import number_is_grounded
-
-# Program name / brand -> canonical program id (matches knowledge/ratios.yaml).
-_PROGRAMS: dict[str, str] = {
-    "turkish": "turkish",
-    "miles&smiles": "turkish",
-    "miles and smiles": "turkish",
-    "aeroplan": "aeroplan",
-    "air canada": "aeroplan",
-    "lifemiles": "lifemiles",
-    "avianca": "lifemiles",
-    "ana": "ana",
-    "ana mileage": "ana",
-    "krisflyer": "krisflyer",
-    "singapore airlines": "krisflyer",
-    "singapore krisflyer": "krisflyer",
-}
+from .programs import PROGRAM_ALIASES as _PROGRAMS
 
 # Region word / city / country -> canonical region token (knowledge/charts.yaml
 # region_map values). Cities/countries fold to their region so prose resolves.
+#
+# Covers all 9 canonical buckets (was north_america/europe/north_asia only,
+# 2026-07-08 - a "southeast asia" mention was silently mis-tagged north_asia
+# via a bare "asia" substring match, caught by mileage/extraction_eval.py's
+# fixture_03; see `_find_regions` below for the matching-order fix that goes
+# with this expansion). Kept as this module's OWN small phrase list (rather
+# than delegating to `regions.canonicalize_region`) because that function
+# canonicalizes a single already-isolated label, not free-running prose — this
+# dict's job is finding candidate phrases in a sentence in the first place.
 _REGIONS: dict[str, str] = {
     "north america": "north_america",
     "united states": "north_america",
@@ -59,11 +53,45 @@ _REGIONS: dict[str, str] = {
     "london": "europe",
     "paris": "europe",
     "frankfurt": "europe",
+    # Longer, more specific phrases FIRST so "southeast asia" / "south asia"
+    # claim their span before the bare "asia" fallback below ever gets a
+    # chance (see the longest-first + claimed-span logic in `_find_regions`).
+    "southeast asia": "southeast_asia",
+    "south east asia": "southeast_asia",
+    "singapore": "southeast_asia",
+    "thailand": "southeast_asia",
+    "bangkok": "southeast_asia",
+    "vietnam": "southeast_asia",
+    "manila": "southeast_asia",
+    "south asia": "south_asia",
+    "india": "south_asia",
+    "delhi": "south_asia",
+    "mumbai": "south_asia",
     "north asia": "north_asia",
-    "asia": "north_asia",
     "japan": "north_asia",
     "tokyo": "north_asia",
+    "korea": "north_asia",
     "seoul": "north_asia",
+    "hong kong": "north_asia",
+    "taiwan": "north_asia",
+    "china": "north_asia",
+    "asia": "north_asia",  # deliberately last/shortest: a catch-all fallback
+    "middle east": "middle_east",
+    "dubai": "middle_east",
+    "doha": "middle_east",
+    "qatar": "middle_east",
+    "uae": "middle_east",
+    "oceania": "oceania",
+    "australia": "oceania",
+    "new zealand": "oceania",
+    "sydney": "oceania",
+    "south america": "south_america",
+    "brazil": "south_america",
+    "argentina": "south_america",
+    "chile": "south_america",
+    "africa": "africa",
+    "south africa": "africa",
+    "nairobi": "africa",
 }
 
 # Cabin phrasing -> canonical cabin (a subset of parse._CABINS).
@@ -170,13 +198,33 @@ _BONUS_CTX = re.compile(
 )
 
 
+_REGIONS_LONGEST_FIRST: list[tuple[str, str]] = sorted(
+    _REGIONS.items(), key=lambda kv: len(kv[0]), reverse=True
+)
+
+
 def _find_regions(sentence: str) -> list[str]:
+    """Find region-phrase hits, longest-phrase-first, without letting a short
+    fallback phrase (e.g. bare "asia") double-match inside a longer phrase's
+    span that already matched (e.g. "southeast asia") — same
+    claimed-span idea `_find_cabins` uses, applied here after the fixture-03
+    regression this caught (2026-07-08): "Southeast Asia" was silently
+    mis-tagged `north_asia` via the bare "asia" substring before this fix.
+    """
     low = sentence.lower()
+    claimed: list[tuple[int, int]] = []
     hits: list[tuple[int, str]] = []
-    for phrase, canonical in _REGIONS.items():
-        pos = low.find(phrase)
-        if pos >= 0:
-            hits.append((pos, canonical))
+    for phrase, canonical in _REGIONS_LONGEST_FIRST:
+        start = 0
+        while True:
+            pos = low.find(phrase, start)
+            if pos < 0:
+                break
+            span = (pos, pos + len(phrase))
+            if not any(a <= pos < b for a, b in claimed):
+                hits.append((pos, canonical))
+                claimed.append(span)
+            start = pos + len(phrase)
     hits.sort()
     ordered: list[str] = []
     for _, region in hits:

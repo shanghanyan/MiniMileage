@@ -1,0 +1,17 @@
+{
+  "source_hint": "yt:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "clean",
+  "notes": "KrisFlyer-specific Saver/Advantage tier vocabulary; south_asia region.",
+  "document": "Singapore KrisFlyer Saver awards from North America to South Asia in premium economy are pricing at 60,000 miles one-way, well below the Advantage tier.",
+  "expected_rows": [
+    {
+      "program": "krisflyer",
+      "region_a": "north_america",
+      "region_b": "south_asia",
+      "cabin": "premium_economy",
+      "miles": 60000,
+      "roundtrip": false
+    }
+  ]
+}

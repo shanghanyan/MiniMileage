@@ -114,6 +114,16 @@ _EXACT: dict[str, str] = {
     "africa": "africa",
     "sub saharan africa": "africa",
     "southern africa": "africa",
+    "north africa": "africa",            # EVA Star Alliance chart column (§ 2026-07-08)
+    "central south africa": "africa",    # EVA "Central, South Africa" column
+    # Oceania (EVA's Star Alliance chart calls it "South West Pacific")
+    "south west pacific": "oceania",
+    "southwest pacific": "oceania",
+    # North America (EVA folds Hawaii + Central America into one column; we
+    # don't have a separate Central America bucket in the 9-region taxonomy,
+    # so this is a deliberate coarser-precision choice, not a guess at a made-
+    # up number — same tradeoff already accepted for plain "hawaii" above).
+    "hawaii central america": "north_america",
 }
 
 # Multi-word aliases safe to match as substrings inside a longer phrase (used to

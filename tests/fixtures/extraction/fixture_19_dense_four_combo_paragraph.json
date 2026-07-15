@@ -1,0 +1,41 @@
+{
+  "source_hint": "yt:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "messy",
+  "notes": "Four (region, cabin, miles) combinations for the SAME program packed into one dense sentence \u2014 the densest recall stress test in this set.",
+  "document": "KrisFlyer's Star Alliance chart shows North America to Southeast Asia running 40,000 miles one-way in economy and 90,000 miles one-way in business, while North America to South Asia is 45,000 miles one-way in economy and 95,000 miles one-way in business.",
+  "expected_rows": [
+    {
+      "program": "krisflyer",
+      "region_a": "north_america",
+      "region_b": "southeast_asia",
+      "cabin": "economy",
+      "miles": 40000,
+      "roundtrip": false
+    },
+    {
+      "program": "krisflyer",
+      "region_a": "north_america",
+      "region_b": "southeast_asia",
+      "cabin": "business",
+      "miles": 90000,
+      "roundtrip": false
+    },
+    {
+      "program": "krisflyer",
+      "region_a": "north_america",
+      "region_b": "south_asia",
+      "cabin": "economy",
+      "miles": 45000,
+      "roundtrip": false
+    },
+    {
+      "program": "krisflyer",
+      "region_a": "north_america",
+      "region_b": "south_asia",
+      "cabin": "business",
+      "miles": 95000,
+      "roundtrip": false
+    }
+  ]
+}

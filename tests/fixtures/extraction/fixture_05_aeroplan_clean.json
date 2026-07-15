@@ -1,0 +1,17 @@
+{
+  "source_hint": "blog:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "clean",
+  "notes": "Baseline aeroplan happy path, round-trip phrasing.",
+  "document": "Air Canada's Aeroplan program is pricing business class from North America to Europe at 60,000 miles round-trip this month, one of the more consistent redemptions out there.",
+  "expected_rows": [
+    {
+      "program": "aeroplan",
+      "region_a": "north_america",
+      "region_b": "europe",
+      "cabin": "business",
+      "miles": 60000,
+      "roundtrip": true
+    }
+  ]
+}

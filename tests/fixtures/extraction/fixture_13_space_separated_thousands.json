@@ -1,0 +1,17 @@
+{
+  "source_hint": "yt:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "messy",
+  "notes": "Number written with a space as the thousands separator ('95 000') instead of a comma.",
+  "document": "KrisFlyer business class from North America to Europe is priced at 95 000 miles one-way under the current chart.",
+  "expected_rows": [
+    {
+      "program": "krisflyer",
+      "region_a": "north_america",
+      "region_b": "europe",
+      "cabin": "business",
+      "miles": 95000,
+      "roundtrip": false
+    }
+  ]
+}

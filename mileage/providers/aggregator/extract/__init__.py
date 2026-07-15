@@ -16,11 +16,13 @@ Design contract (matches Cursor-Mileage-Plan §6.2):
 
 from .base import Extractor, LLMExtractor
 from .deterministic import DeterministicExtractor
+from .factory import build_extractor
 from .grounding import number_is_grounded
 
 __all__ = [
     "Extractor",
     "LLMExtractor",
     "DeterministicExtractor",
+    "build_extractor",
     "number_is_grounded",
 ]

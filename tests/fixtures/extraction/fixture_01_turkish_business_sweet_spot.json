@@ -1,0 +1,17 @@
+{
+  "source_hint": "email:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "clean",
+  "notes": "Baseline single-row happy path: one program, one region pair, one cabin, one grounded number, unambiguous phrasing.",
+  "document": "This week's sweet spot: Turkish Miles&Smiles is still pricing business class from North America to Europe at 45,000 miles one-way, no fuel surcharges on most itineraries. Transfer from Capital One at 1:1 and you're looking at a strong redemption for a lie-flat seat across the Atlantic.",
+  "expected_rows": [
+    {
+      "program": "turkish",
+      "region_a": "north_america",
+      "region_b": "europe",
+      "cabin": "business",
+      "miles": 45000,
+      "roundtrip": false
+    }
+  ]
+}

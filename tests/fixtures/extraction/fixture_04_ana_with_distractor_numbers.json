@@ -1,0 +1,17 @@
+{
+  "source_hint": "email:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "clean",
+  "notes": "Precision test: a flight-number/time distractor (NH106, 11:05am) and a vague devaluation-rumor sentence with no digits at all must not produce a row.",
+  "document": "Flight NH106 departs Tokyo Narita at 11:05am and arrives before noon local time in North America -- a good option if you're booking ANA Mileage Club business class from North Asia to North America for 88,000 miles one-way this quarter. Some readers speculate the chart could rise significantly at some unspecified future date, but nothing is confirmed and no new number has been published yet.",
+  "expected_rows": [
+    {
+      "program": "ana",
+      "region_a": "north_asia",
+      "region_b": "north_america",
+      "cabin": "business",
+      "miles": 88000,
+      "roundtrip": false
+    }
+  ]
+}

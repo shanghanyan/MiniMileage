@@ -1,0 +1,17 @@
+{
+  "source_hint": "blog:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "messy",
+  "notes": "KNOWN DETERMINISTIC-EXTRACTOR GAP (documented, not a bug to silently 'fix' by guessing): 'within <region>' phrasing should produce a same-region pair (southeast_asia, southeast_asia), but deterministic.py's single-region fallback only special-cases north_america -> (north_america, north_america); any OTHER single region falls back to (north_america, other) instead. Expect this fixture to score 0/1 against the deterministic backend today \u2014 that's the point. Contrast with fixture_25, the north_america case, which the same code path gets right.",
+  "document": "Flying within Southeast Asia? KrisFlyer prices intra-region economy awards at just 15,000 miles round-trip, one of the best short-haul deals going.",
+  "expected_rows": [
+    {
+      "program": "krisflyer",
+      "region_a": "southeast_asia",
+      "region_b": "southeast_asia",
+      "cabin": "economy",
+      "miles": 15000,
+      "roundtrip": true
+    }
+  ]
+}

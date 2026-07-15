@@ -1,0 +1,17 @@
+{
+  "source_hint": "blog:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "messy",
+  "notes": "A percentage ('15%') and a bare year ('2027') both sit below the plausible-miles floor (3,000) and should never be mistaken for the real price.",
+  "document": "Turkish increased Star Alliance pricing by roughly 15% starting January 2027, but as of today business class from North America to Europe still books for 45,000 miles one-way under the current chart.",
+  "expected_rows": [
+    {
+      "program": "turkish",
+      "region_a": "north_america",
+      "region_b": "europe",
+      "cabin": "business",
+      "miles": 45000,
+      "roundtrip": false
+    }
+  ]
+}

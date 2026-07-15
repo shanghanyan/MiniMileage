@@ -93,6 +93,15 @@ class Config:
     rot_max_failures: int = 3
     rot_max_selector_misses: int = 2
     rediscovery_min_rotted: int = 1
+    # --- Local LLM extractor backend (§6.2) --------------------------------- #
+    # Default stays the keyless deterministic extractor everywhere (offline
+    # tests, a fresh checkout, CI). Set MILEAGE_EXTRACTOR_BACKEND=ollama once a
+    # local Ollama server + model are actually running (see
+    # Cursor-LLM-Extractor-Task.md) to opt every ingest call site into
+    # `OllamaExtractor` via `extract.build_extractor(config)`.
+    extractor_backend: str = "deterministic"
+    ollama_host: str = "http://localhost:11434"
+    ollama_model: str = "qwen2.5:7b-instruct"
 
     @property
     def sources_path(self) -> Path:
@@ -131,6 +140,9 @@ class Config:
                 os.getenv("MILEAGE_ROT_MAX_SELECTOR_MISSES", "2")
             ),
             rediscovery_min_rotted=int(os.getenv("MILEAGE_REDISCOVERY_MIN_ROTTED", "1")),
+            extractor_backend=os.getenv("MILEAGE_EXTRACTOR_BACKEND", "deterministic"),
+            ollama_host=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
+            ollama_model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b-instruct"),
         )
 
 
@@ -255,11 +267,25 @@ def build_repository(config: Config | None = None) -> SQLiteRepository:
     return SQLiteRepository(config.db_path)
 
 
-def partner_programs(config: Config | None = None) -> list[str]:
-    """Capital One transfer partners declared in knowledge/ratios.yaml."""
+def partner_programs(
+    config: Config | None = None, currency: Optional[str] = None
+) -> list[str]:
+    """Transfer partners declared in knowledge/ratios.yaml for `currency`.
+
+    `currency=None` preserves prior behavior (the top-level, capital_one block)
+    for existing callers. Pass the actual query currency to restrict the CHARTS
+    query to that currency's partners — otherwise a `--currency amex_mr` run
+    would still be narrowed to capital_one's partner list (§13 Phase 7).
+    """
     config = config or Config.from_env()
     path = config.knowledge_dir / "ratios.yaml"
     if not path.exists():
         return []
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    return list((data.get("partners") or {}).keys())
+    top_currency = data.get("from_currency", DEFAULT_CURRENCY)
+    if currency is None or currency == top_currency:
+        return list((data.get("partners") or {}).keys())
+    for block in data.get("currencies") or []:
+        if block.get("from_currency") == currency:
+            return list((block.get("partners") or {}).keys())
+    return []

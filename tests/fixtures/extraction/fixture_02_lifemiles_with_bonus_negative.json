@@ -1,0 +1,17 @@
+{
+  "source_hint": "blog:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "clean",
+  "notes": "Precision test: a sign-up bonus number (100,000) appears before the real award price and must NOT be extracted as a chart row.",
+  "document": "Card news: the Capital One Venture X is currently offering a welcome bonus of 100,000 miles after you spend $4,000 in the first 3 months -- one of the best offers we've seen this year. Separately, on the redemption side, Avianca LifeMiles continues to price economy class from North America to Europe at just 25,000 miles round-trip, one of the cheapest ways to cross the Atlantic if you can find space.",
+  "expected_rows": [
+    {
+      "program": "lifemiles",
+      "region_a": "north_america",
+      "region_b": "europe",
+      "cabin": "economy",
+      "miles": 25000,
+      "roundtrip": true
+    }
+  ]
+}

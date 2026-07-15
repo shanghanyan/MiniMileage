@@ -1,0 +1,17 @@
+{
+  "source_hint": "blog:synthetic_bootstrap",
+  "synthetic": true,
+  "difficulty": "clean",
+  "notes": "'within North America' same-region phrasing \u2014 this IS handled correctly by deterministic.py's single-hint fallback special-case for north_america specifically. Contrast with fixture_20, the same 'within X' phrasing for a non-north_america region, which is NOT handled.",
+  "document": "Aeroplan short-haul awards within North America start at just 15,000 miles round-trip in economy for flights under 2,000 miles.",
+  "expected_rows": [
+    {
+      "program": "aeroplan",
+      "region_a": "north_america",
+      "region_b": "north_america",
+      "cabin": "economy",
+      "miles": 15000,
+      "roundtrip": true
+    }
+  ]
+}

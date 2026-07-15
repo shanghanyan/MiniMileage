@@ -115,10 +115,20 @@ targets:
 
   # KrisFlyer official one-way Advantage/Saver chart PDF (direct CDN, not WAF-
   # protected). URL confirmed live 2026-07-01 (Content-Type: application/pdf),
-  # effective 1 Nov 2025. Note: this is a ZONE x ZONE matrix (Zones 1-13), not a
-  # from/to/distance grid — the current wide-table PDF selector will not extract
-  # it. Kept as a confirmed cross-check source pending a zone-matrix PDF parser;
-  # KrisFlyer route data is served today by atf-krisflyer-chart (HTML).
+  # effective 1 Nov 2025; independently re-confirmed live via web search
+  # 2026-07-08 (same filename still indexed) — this is a real, current URL,
+  # not a guess. Note: this is a ZONE x ZONE matrix (Zones 1-13, SQ own-metal),
+  # not a from/to/distance grid — the current wide-table PDF selector will not
+  # extract it, AND it shares the `program_zones.krisflyer` gap documented on
+  # 10x-krisflyer-chart above (no airport->zone table exists yet, so even a
+  # successful PDF parse wouldn't resolve to route quotes today). Kept as a
+  # confirmed cross-check source pending both fixes; KrisFlyer route data is
+  # served today by atf-krisflyer-chart (HTML). A SEPARATE official PDF
+  # specifically for the Star Alliance partner chart also exists and is more
+  # relevant to this project's Star Alliance routing thesis:
+  # https://www.singaporeair.com/content/dam/sia/web-assets/pdfs/ppsclub-krisflyer/krisflyer/progupdates/awardcharts/StarAllianceRound-TripAwardChartupdated1Nov25.pdf
+  # (not added as its own target — same zone-matrix + program_zones gap as
+  # above; the HTML equivalent of this same data is 10x-krisflyer-chart).
   # Requires pdfplumber for binary extraction; gracefully returns [] without it.
   - name: krisflyer-official-pdf
     url: https://www.singaporeair.com/content/dam/sia/web-assets/pdfs/ppsclub-krisflyer/krisflyer/progupdates/awardcharts/SingaporeAirlinesOne-WayAdvantageSaverAwardChartupdated1Nov25.pdf
@@ -164,6 +174,41 @@ targets:
     updated_at: "2026-07-06"
     layers: [charts]
 
+  # EVA Air Infinity MileageLands — NEW 2026-07-08. EVA had a `capital_one`
+  # ratio (see knowledge/ratios.yaml) but ZERO chart source before this: a
+  # ratio with nothing to convert into was a dead end. This page's "Star
+  # Alliance partner award" section is a named-region x named-region matrix
+  # (Taiwan / Hong Kong,Macau / China / North Asia / ... / Europe / Middle
+  # East / North Africa / Central,South Africa), one table per cabin under an
+  # exact "<Cabin> Class" <h3> — same shape `_is_zone_matrix_table` /
+  # `_strict_cabin_heading` already parse for 10x-turkish-chart, just with
+  # region names instead of "Zone N" numbers. `_matrix_zone_key` already falls
+  # back to `canonicalize_region` for non-numeric headers, so this reuses
+  # `format: html_table_zone_matrix` as-is — no new parser needed.
+  # RE-VERIFIED 2026-07-08 (second pass): re-fetched the live page (still
+  # serving identical content) and reconstructed a faithful HTML snippet of
+  # its real "Economy Class" table (same headers/values observed on the live
+  # page) and ran it through the ACTUAL `parse_chart_html_zone_matrix()` in
+  # this repo (not hand-traced this time) — it parsed 36 real rows, confirming
+  # the regions.py additions ("north africa"/"south west pacific"/"hawaii
+  # central america"/"central south africa") do make every column resolve.
+  # Still NOT a live network fetch of the real page through the real fetch
+  # stack (this sandbox has no HTTP egress from its shell, only through the
+  # web_fetch tool, which returns cleaned text, not raw HTML) — the open risk
+  # is the real page's raw HTML structure (table nesting, extra markup)
+  # differing from this reconstruction, not the region-mapping logic, which is
+  # now proven. Trust bumped 0.45 -> 0.55 to reflect that; still run
+  # `mileage sources --validate-urls --deep` for the final live confirmation.
+  - name: 10x-eva-chart
+    url: https://10xtravel.com/eva-air-infinity-mileagelands-award-charts/
+    format: html_table_zone_matrix
+    program: eva
+    provides: chart
+    role: primary   # the only EVA chart source in this file
+    trust: 0.55
+    updated_at: "2026-07-08"
+    layers: [charts]
+
   # LifeMiles third-party PDF (thriftytraveler.com, zone matrix, 2022).
   # Requires pdfplumber; gracefully returns []. Trust low — outdated + third-party.
   # Useful only as a cross-check when ATF HTML is unavailable.
@@ -175,6 +220,49 @@ targets:
     role: fallback
     trust: 0.40
     updated_at: "2022-06-01"
+    layers: [charts]
+
+  # KrisFlyer: 10xtravel "Star Alliance" partner-award matrix — NEW 2026-07-08.
+  # A real, distinct numeric zone x zone matrix (Zone 1-12, headed literally
+  # "Star Alliance Economy/Business/First Award Chart") separate from the
+  # same page's Singapore-Airlines-own-metal Saver/Advantage charts (13 zones,
+  # headed "Saver/Advantage <Cabin> Award Chart" — deliberately NOT matched,
+  # out of scope). Required a small, targeted parser extension
+  # (`_STAR_ALLIANCE_CABIN_HEADING_RE` in parse.py) since the heading shape
+  # ("Star Alliance <Cabin> Award Chart") differs from the Turkish page's
+  # ("<Cabin> Class"); reuses the existing numeric-zone-matrix path otherwise.
+  # CAVEAT — will not resolve to route quotes yet: `charts.yaml::program_zones`
+  # has no `krisflyer` airport->zone table (the existing krisflyer-official-pdf
+  # below has the exact same gap). Building one means assigning each of the
+  # ~80 airports in `charts.yaml::airports` to one of these 12 zones — left
+  # undone here rather than guessed. The zone legend (from this same page) for
+  # whoever does that next:
+  #   1 SE Asia 1 (Brunei/Indonesia/Malaysia/Singapore) · 2 SE Asia 2 (Cambodia/
+  #   Laos/Myanmar/Philippines/Thailand/Vietnam) · 3 N Asia 1 (HK/Macau/Taiwan) ·
+  #   4 N Asia 2 (China/Guam/Japan/Micronesia/Palau/Russia Far East/S Korea) ·
+  #   5 South West Pacific (Australia/NZ/Pacific islands) · 6 North America
+  #   (Canada/USA ex-Hawaii) · 7 Hawaii+Central America/Caribbean · 8 South
+  #   America · 9 Europe · 10 Middle East + North Africa · 11 Central/South
+  #   Africa · 12 Central/South Asia (India/Pakistan/Bangladesh/...).
+  # RE-VERIFIED 2026-07-08 (second pass): re-fetched the live page (still
+  # serving identical content) and reconstructed a faithful HTML snippet with
+  # BOTH a "Saver Economy Award Chart" (own-metal, should be skipped) and a
+  # "Star Alliance Economy Award Chart" table (should parse), matching the
+  # real headings/values observed live, then ran it through the ACTUAL
+  # `parse_chart_html_zone_matrix()` in this repo. Result: exactly 0 rows from
+  # the own-metal table and 12 real `krisflyer_zone_N` rows from the Star
+  # Alliance table — proves `_STAR_ALLIANCE_CABIN_HEADING_RE` both matches
+  # what it should and does NOT cross-contaminate from the similarly-shaped
+  # own-metal table. The `program_zones.krisflyer` gap above is still real and
+  # still unfixed (parsing works; airport->zone resolution doesn't yet).
+  - name: 10x-krisflyer-chart
+    url: https://10xtravel.com/singapore-airlines-krisflyer-award-charts/
+    format: html_table_zone_matrix
+    program: krisflyer
+    provides: chart
+    role: fallback
+    trust: 0.5
+    updated_at: "2026-07-08"
     layers: [charts]
 
   # ── L3 LIVE AWARD SPACE ────────────────────────────────────────────────────

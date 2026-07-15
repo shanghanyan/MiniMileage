@@ -873,19 +873,36 @@ _CABIN_CLASS_HEADING_RE = re.compile(
     r"^(premium\s+economy|economy|business|first)\s+class$", re.I
 )
 
+# Second exact shape (10xtravel's KrisFlyer page, § added 2026-07-08): the
+# PARTNER-award matrix is headed "Star Alliance <Cabin> Award Chart" — no
+# "Class" suffix, and note "First" not "First/Suite" here (that longer form is
+# the OWN-METAL Saver/Advantage heading below, deliberately not matched by
+# this pattern). Requiring the literal "Star Alliance " prefix is what keeps
+# this from ever matching the same page's "Saver Economy Award Chart" /
+# "Advantage Business Award Chart" (own-metal SQ pricing, out of scope for a
+# Star-Alliance-partner chart source) or any "... for Upgrades ..." heading.
+_STAR_ALLIANCE_CABIN_HEADING_RE = re.compile(
+    r"^star alliance (premium\s+economy|economy|business|first)\s+award chart$",
+    re.I,
+)
+
 
 def _strict_cabin_heading(heading: str) -> Optional[str]:
-    """A cabin name ONLY when the heading is EXACTLY "<Cabin> Class".
+    """A cabin name ONLY when the heading is EXACTLY "<Cabin> Class" or
+    "Star Alliance <Cabin> Award Chart".
 
     Returns None (selector miss) for a blank/missing heading, and for
-    anything that isn't that exact two/three-word shape — e.g. "Economy to
-    Business Class" (an upgrade/conversion table, not an award chart, despite
-    sharing the exact same zone-matrix grid shape).
+    anything that isn't one of those exact shapes — e.g. "Economy to
+    Business Class" (an upgrade/conversion table) or "Saver Economy Award
+    Chart" (an own-metal table), both of which share the same zone-matrix
+    grid shape but are not a Star-Alliance-partner award chart.
     """
     norm = re.sub(r"\s+", " ", (heading or "")).strip()
     if not norm:
         return None
-    m = _CABIN_CLASS_HEADING_RE.match(norm)
+    m = _CABIN_CLASS_HEADING_RE.match(norm) or _STAR_ALLIANCE_CABIN_HEADING_RE.match(
+        norm
+    )
     if not m:
         return None
     word = m.group(1).lower()
