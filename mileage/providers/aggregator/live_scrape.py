@@ -85,6 +85,9 @@ class TargetResult:
     resolved: Optional[str] = None      # e.g. "LAX->IST biz 90000mi (aeroplan)"
     reclassified: bool = False          # fallback fail downgraded to warn?
     sample: list[dict] = field(default_factory=list)
+    # Bypass layer 1 — populated when fetch fails or returns a challenge page.
+    block_type: Optional[str] = None
+    block_signals: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -262,16 +265,35 @@ def check_target(
             if offline_http
             else "fetch returned None (fallback chain exhausted — check logs)"
         )
+        base.block_type = "network" if offline_http else "unknown"
         return base
+    if getattr(result, "block_type", None) and result.block_type != "none":
+        base.block_type = result.block_type
+        base.block_signals = list(getattr(result, "block_signals", []) or [])
     if not result.ok:
-        base.detail = f"fetch not ok: status={result.status} via={result.via}"
-        return base
-    if len(result.text) < _MIN_BODY_BYTES:
+        bt = getattr(result, "block_type", None) or "unknown"
+        base.block_type = bt
+        base.block_signals = list(getattr(result, "block_signals", []) or [])
         base.detail = (
-            f"fetch returned suspiciously short body ({len(result.text)} bytes) "
-            "— possible JS shell or challenge page"
+            f"fetch not ok: status={result.status} via={result.via} "
+            f"block_type={bt}"
         )
         return base
+    if len(result.text) < _MIN_BODY_BYTES:
+        bt = getattr(result, "block_type", None) or "short_shell"
+        base.block_type = bt
+        base.block_signals = list(getattr(result, "block_signals", []) or [])
+        base.detail = (
+            f"fetch returned suspiciously short body ({len(result.text)} bytes) "
+            f"— block_type={bt} (possible JS shell or challenge page)"
+        )
+        return base
+
+    # Challenge page that still returned a long body (e.g. Cloudflare interstitial).
+    if getattr(result, "block_type", None) not in (None, "none"):
+        base.block_type = result.block_type
+        base.block_signals = list(getattr(result, "block_signals", []) or [])
+        # Continue to parse — may still yield 0 rows; diagnosis will carry block_type.
 
     # ---- Stage 2: parse (production dispatch, no drift) ------------------- #
     if target.provides == "award":
@@ -283,6 +305,10 @@ def check_target(
 
     if not rows:
         base.detail = diagnose_zero_rows(target, result)
+        if getattr(result, "block_type", None) not in (None, "none"):
+            base.block_type = result.block_type
+            base.block_signals = list(getattr(result, "block_signals", []) or [])
+            base.detail = f"{base.detail} [block_type={result.block_type}]"
         # Live award space fluctuates, so 0 rows there is a weak signal: warn.
         base.status = "warn" if target.provides == "award" else "fail"
         return base

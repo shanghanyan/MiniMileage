@@ -45,9 +45,24 @@ class RedisUnavailable(RuntimeError):
 
 
 def redis_from_url(url: str, **kwargs: Any):
-    """Build a redis client from a URL (redis:// or rediss:// for Upstash TLS)."""
+    """Build a redis client from a URL (redis:// or rediss:// for Upstash TLS).
+
+    For ``rediss://`` URLs, uses certifi's CA bundle when available. macOS
+    Python.org builds often lack a system trust store wired into OpenSSL, which
+    otherwise yields ``CERTIFICATE_VERIFY_FAILED`` and forces a silent fallback
+    to in-process cache (cold scrape on every API restart).
+    """
     if _redis is None:
         raise RedisUnavailable()
+    if url.startswith("rediss://") and "ssl_ca_certs" not in kwargs:
+        try:
+            import certifi
+            import ssl
+
+            kwargs.setdefault("ssl_cert_reqs", ssl.CERT_REQUIRED)
+            kwargs.setdefault("ssl_ca_certs", certifi.where())
+        except ImportError:
+            pass  # certifi absent — let redis-py use its defaults
     return _redis.Redis.from_url(url, **kwargs)
 
 

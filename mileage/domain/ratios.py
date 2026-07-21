@@ -18,11 +18,14 @@ from .models import TransferRatio
 
 
 def index_by_program(ratios: Iterable[TransferRatio]) -> dict[str, TransferRatio]:
-    """Most-trusted ratio per destination program."""
+    """Best ratio per destination program (confidence, then effective_ratio)."""
     best: dict[str, TransferRatio] = {}
     for r in ratios:
         cur = best.get(r.to_program)
-        if cur is None or r.confidence > cur.confidence:
+        if cur is None or (r.confidence, r.effective_ratio) > (
+            cur.confidence,
+            cur.effective_ratio,
+        ):
             best[r.to_program] = r
     return best
 
@@ -46,4 +49,4 @@ def ratio_for(
     ]
     if not candidates:
         return None
-    return max(candidates, key=lambda r: r.confidence)
+    return max(candidates, key=lambda r: (r.confidence, r.effective_ratio))

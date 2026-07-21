@@ -1,11 +1,18 @@
 export type PipelineStep = "route" | "gathering" | "crosscheck" | "redemptions";
 export type RunStatus = "pending" | "running" | "complete" | "error";
 
+export type CurrencyId =
+  | "capital_one"
+  | "amex_mr"
+  | "chase_ur"
+  | "citi_typ"
+  | "bilt";
+
 export interface RedemptionRequest {
   origin: string;
   dest: string;
   cabin: "economy" | "premium_economy" | "business" | "first";
-  currency: string;
+  currency: CurrencyId | string;
   miles: number;
   card: "venture" | "venture_x";
 }
@@ -71,6 +78,9 @@ export interface ScrapeTarget {
   resolved?: string | null;
   reclassified: boolean;
   sample: Array<Record<string, unknown>>;
+  /** Bypass layer 1 — what blocked / challenged the fetch, if anything. */
+  block_type?: string | null;
+  block_signals?: string[];
 }
 
 export interface ScrapeProgramEntry {

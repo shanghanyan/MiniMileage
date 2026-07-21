@@ -26,7 +26,7 @@ def test_inventory_lists_discovery_and_providers() -> None:
 
     blogs = [d for d in inv.discovery if d.kind == "blog"]
     youtube = [d for d in inv.discovery if d.kind == "youtube"]
-    assert len(blogs) == 7
+    assert len(blogs) == 8   # +view_from_the_wing, 2026-07-20 (blog_rss only, no channel_id)
     assert len(youtube) == 6
 
     names = {p.name for p in inv.providers}
@@ -42,7 +42,7 @@ def test_inventory_lists_discovery_and_providers() -> None:
     from mileage.providers.aggregator.sources import load_targets
 
     assert inv.summary["chart_targets"] == len(load_targets(config.sources_path))
-    assert inv.summary["discovery_channels"] == 1 + 7 + 6
+    assert inv.summary["discovery_channels"] == 1 + 8 + 6
 
 
 def test_inventory_email_ready_offline() -> None:

@@ -5,8 +5,8 @@ Nodes:
   - one node per partner program
   - a single SEAT sink representing the requested route/cabin
 
-Edges:
-  - currency -> program : a verified TransferRatio (attr: ratio, confidence, ...)
+Edges (MultiDiGraph — parallel currency→program edges for base vs bonus):
+  - currency -> program : a verified TransferRatio (attr: ratio, effective_ratio, ...)
   - program  -> SEAT    : a verified award cost (attr: miles, confidence, flags)
 
 A program only connects to SEAT if there is a verified award cost for it, and
@@ -25,13 +25,17 @@ from ..verify.crosscheck import VerifiedAward
 
 SEAT_NODE = "__SEAT__"
 
+# Max transfer hops (currency → … → program) before the SEAT edge. Caps
+# combinatorial growth once program→program edges appear.
+MAX_TRANSFER_HOPS = 2
+
 
 def build_graph(
     currency: str,
     ratios: Iterable[TransferRatio],
     awards: Iterable[VerifiedAward],
-) -> nx.DiGraph:
-    g = nx.DiGraph()
+) -> nx.MultiDiGraph:
+    g = nx.MultiDiGraph()
     g.add_node(currency, kind="currency")
     g.add_node(SEAT_NODE, kind="seat")
 
@@ -39,13 +43,21 @@ def build_graph(
         if r.from_currency != currency:
             continue
         g.add_node(r.to_program, kind="program")
+        key = "bonus" if r.is_bonus else "base"
+        # Distinct keys so base + bonus both exist as parallel edges.
+        if r.is_bonus and r.bonus_label:
+            key = f"bonus:{r.bonus_label}"
         g.add_edge(
             r.from_currency,
             r.to_program,
-            ratio=r.ratio,
+            key=key,
+            ratio=r.effective_ratio,
+            base_ratio=r.ratio,
+            bonus_multiplier=r.bonus_multiplier,
             confidence=r.confidence,
             provenance=r.provenance,
             flags=list(r.flags),
+            bonus_label=r.bonus_label,
         )
 
     for a in awards:
@@ -55,6 +67,7 @@ def build_graph(
         g.add_edge(
             a.program,
             SEAT_NODE,
+            key="award",
             miles=a.miles,
             confidence=a.confidence,
             provenance=a.provenance,

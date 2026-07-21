@@ -265,6 +265,168 @@ targets:
     updated_at: "2026-07-08"
     layers: [charts]
 
+  # ── TIER 2 EXPANSION (2026-07-20) — 7 new programs, all AwardTravelFinder ──
+  #
+  # All URLs below are confirmed live (fetched 2026-07-20) via
+  # https://awardtravelfinder.com/award-charts — the same site + table
+  # generator as the six programs above, so no new WAF/bot-detection risk.
+  # ATF actually renders THREE distinct table shapes depending on how each
+  # airline prices awards, and only one of them fits the existing
+  # `html_table_wide` parser out of the box:
+  #   (1) zone-pair (From=region, To=region/range)      -> resolves TODAY
+  #   (2) hub-token (From=fixed hub city, To=region)     -> resolves after the
+  #       `dubai`/`abu dhabi` -> middle_east additions in regions.py (2026-07-20)
+  #   (3) pure distance-band (From=Zone N or mi-range, To=mi-range/label, NO
+  #       region names anywhere) -> does NOT resolve; needs a new "global
+  #       distance-band" parser + a matching domain/charts.py resolution path
+  #       (route-distance-only lookup, not region-pair). Genuinely new code,
+  #       not a YAML fix — same category gap as the original Turkish/KrisFlyer
+  #       guide pages before the destination-table parser was built.
+  # Trust/role below reflects which bucket each source landed in after tracing
+  # its real fetched table through the actual `canonicalize_region`/
+  # `_emit_wide_rows` logic (not guessed) — see tests/test_tier2_charts.py.
+
+  # Flying Blue: clean zone-pair shape, same as LifeMiles. Ranges like
+  # "10,000-20,000" use the lower (Promo/Classic-saver) bound per
+  # `_emit_wide_rows`' documented range handling.
+  - name: atf-flying-blue-chart
+    url: https://awardtravelfinder.com/award-charts/flying-blue
+    format: html_table_wide
+    program: flying_blue
+    provides: chart
+    role: primary
+    trust: 0.55
+    updated_at: "2026-07-20"
+    layers: [charts]
+
+  # Qantas: zone-pair shape. Traced against the real fetched table: 5 of 8
+  # rows resolve (NZ/SE Asia/NE Asia/Europe/Middle East+Africa via
+  # `canonicalize_region`); "Within Australia (short/long)" and "US / Canada"
+  # rows are dropped + counted (compound/prefixed labels regions.py doesn't
+  # map) — real coverage loss, not a bug, per the no-hallucination contract.
+  - name: atf-qantas-chart
+    url: https://awardtravelfinder.com/award-charts/qantas
+    format: html_table_wide
+    program: qantas
+    provides: chart
+    role: primary
+    trust: 0.5
+    updated_at: "2026-07-20"
+    layers: [charts]
+
+  # Etihad: hub-token shape (From="Abu Dhabi" every row). Traced against the
+  # real fetched table: all 6 rows resolve now that "abu dhabi" -> middle_east
+  # is in regions.py (parenthetical mileage notes like "Europe (London
+  # ~3,400mi)" strip cleanly via the existing bracket-retry).
+  - name: atf-etihad-chart
+    url: https://awardtravelfinder.com/award-charts/etihad-airways
+    format: html_table_wide
+    program: etihad
+    provides: chart
+    role: primary
+    trust: 0.5
+    updated_at: "2026-07-20"
+    layers: [charts]
+
+  # Emirates: hub-token shape (From="Dubai" every row). Only 2 of 4 rows
+  # resolve even with the new "dubai" mapping — "Asia (Short-Haul)"/"Asia
+  # (Long-Haul)" strip their parenthetical fine but "Asia" alone is
+  # genuinely ambiguous (north/southeast/south) and is correctly dropped, not
+  # guessed. Pricing itself is also approximate ("~" prefixed on ATF, Emirates
+  # publishes no fixed chart) — trust reflects both gaps.
+  - name: atf-emirates-chart
+    url: https://awardtravelfinder.com/award-charts/emirates
+    format: html_table_wide
+    program: emirates
+    provides: chart
+    role: primary
+    trust: 0.4
+    updated_at: "2026-07-20"
+    layers: [charts]
+
+  # Virgin Atlantic: mixed shape — "US -> Europe/US/Japan (via Delta/ANA)"
+  # rows resolve today ("US" is already an exact-mapped token; "(via Delta)"
+  # etc strip as parentheticals), but "London -> New York / Boston" style
+  # rows do NOT: "London" isn't a mapped region token and destinations are
+  # compound CITY pairs, not regions. Real coverage: 3 of 7 rows. Fixing the
+  # London-origin rows needs a destination-table-style parser keyed on
+  # IATA/city (same category as the original Turkish/KrisFlyer gap), not a
+  # regions.py tweak — "London" resolving to "europe" wouldn't help since the
+  # destination cells still wouldn't canonicalize.
+  - name: atf-virgin-atlantic-chart
+    url: https://awardtravelfinder.com/award-charts/virgin-atlantic
+    format: html_table_wide
+    program: virgin_atlantic
+    provides: chart
+    role: primary   # only Virgin Atlantic chart source in this file
+    trust: 0.35
+    updated_at: "2026-07-20"
+    layers: [charts]
+
+  # British Airways / Avios: pure distance-band shape (From="Zone 1".."Zone
+  # 8", To="0-650 miles".."6,501+ miles" — no region names at all, applies
+  # globally regardless of origin/destination). Does NOT resolve with
+  # `html_table_wide` today (`canonicalize_region("Zone 1")` and
+  # `canonicalize_region("0-650 miles")` both correctly return None -> 0
+  # rows, not wrong rows). Kept as role:primary (sole Avios source, real
+  # content: 8 zones x 3 cabins, confirmed live) pending a new global
+  # distance-only parser + domain/charts.py resolution path. Avios also
+  # covers Iberia and Qatar Airways bookings from the same pool.
+  - name: atf-avios-chart
+    url: https://awardtravelfinder.com/award-charts/british-airways
+    format: html_table_wide
+    program: avios
+    provides: chart
+    role: primary
+    trust: 0.3
+    updated_at: "2026-07-20"
+    layers: [charts]
+
+  # Cathay Pacific / Asia Miles: same pure-distance-band gap as Avios above
+  # (From="0-750 mi".."7,501+ mi", To=descriptive label like "Short-haul
+  # Asia" — no region names). 0 rows today; same new-parser dependency as
+  # Avios. Real content confirmed live (6 distance bands x 3 cabins).
+  - name: atf-cathay-pacific-chart
+    url: https://awardtravelfinder.com/award-charts/cathay-pacific
+    format: html_table_wide
+    program: cathay_pacific
+    provides: chart
+    role: primary
+    trust: 0.3
+    updated_at: "2026-07-20"
+    layers: [charts]
+
+  # JetBlue TrueBlue: ATF's own page says this explicitly — "Revenue-based
+  # pricing with no fixed chart" (dynamic, correlates to cash fare). The URL
+  # is real and live but the "chart" table is illustrative ranges, not a
+  # stable award chart; same caution as Southwest in the roadmap doc. Kept at
+  # low trust/fallback rather than omitted, since a real page does exist.
+  - name: atf-jetblue-chart
+    url: https://awardtravelfinder.com/award-charts/jetblue
+    format: html_table_wide
+    program: jetblue
+    provides: chart
+    role: fallback
+    trust: 0.25
+    updated_at: "2026-07-20"
+    layers: [charts]
+
+  # United MileagePlus: same caution as JetBlue — ATF's own chart-hub
+  # description says "Dynamic pricing with saver baselines," not a fixed
+  # chart. Only reachable from Chase/Bilt today (Capital One does not
+  # transfer to United by design, see ratios.yaml note). Table shape/content
+  # not individually verified this session (budget) — treat as unconfirmed
+  # until a live `--validate-urls --deep` pass.
+  - name: atf-united-chart
+    url: https://awardtravelfinder.com/award-charts/united
+    format: html_table_wide
+    program: united
+    provides: chart
+    role: fallback
+    trust: 0.2
+    updated_at: "2026-07-20"
+    layers: [charts]
+
   # ── L3 LIVE AWARD SPACE ────────────────────────────────────────────────────
   #
   # Candidate public L3 sources evaluated (NOT added — see notes):

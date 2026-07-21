@@ -43,6 +43,7 @@ class DiscoverResult:
     email_links_followed: int = 0
     used_fixtures: bool = False
     marked_stale: set = field(default_factory=set)
+    email_deleted: int = 0
 
     @property
     def by_intake(self) -> dict[str, int]:
@@ -103,6 +104,7 @@ def run_all_intakes(
             result.email_docs = len(email.documents)
             result.email_links_followed = email.email_links_followed
             result.used_fixtures = email.used_fixtures
+            result.email_deleted = email.deleted_count
             obs.set_output(
                 s,
                 f"{len(email.rows)} rows from {result.email_docs} emails "

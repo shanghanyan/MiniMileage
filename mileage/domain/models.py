@@ -157,9 +157,14 @@ class AwardQuote:
 class TransferRatio:
     """L4 — how a transferable currency converts into a program.
 
-    ratio = program_points received per 1 source point. Capital One -> most
-    Star Alliance partners is 1:1. Capital One -> United does NOT exist; that
-    absence is load-bearing and is represented by the lack of a row.
+    ratio = program_points received per 1 source point (base rate). Capital One
+    -> most Star Alliance partners is 1:1. Capital One -> United does NOT exist;
+    that absence is load-bearing and is represented by the lack of a row.
+
+    Optional transfer bonuses: ``bonus_multiplier`` (e.g. 1.3 = +30%) applied
+    on top of ``ratio`` while ``valid_from``/``valid_until`` (ISO dates) contain
+    "today". Effective ratio = ratio * bonus_multiplier. Inactive bonus rows
+    are filtered out by the curated loader before they reach the graph.
     """
 
     from_currency: str         # e.g. "capital_one"
@@ -170,6 +175,18 @@ class TransferRatio:
     )
     confidence: float = 1.0
     flags: list[str] = field(default_factory=list)
+    bonus_multiplier: float = 1.0
+    valid_from: Optional[str] = None   # ISO date inclusive, or None
+    valid_until: Optional[str] = None  # ISO date inclusive, or None
+    bonus_label: Optional[str] = None  # e.g. "+30% transfer bonus"
+
+    @property
+    def effective_ratio(self) -> float:
+        return self.ratio * self.bonus_multiplier
+
+    @property
+    def is_bonus(self) -> bool:
+        return self.bonus_multiplier != 1.0 or "transfer_bonus" in self.flags
 
 
 # --------------------------------------------------------------------------- #

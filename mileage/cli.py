@@ -693,6 +693,7 @@ def run_discover(
         print(f"Discovery intake (--all) — mailbox: {addr}  ·  source: {source}")
         print("=" * 68)
         print(f"  emails ingested    : {result.email_docs}")
+        print(f"  emails trashed     : {result.email_deleted}")
         print(f"  new blog posts     : {result.blog_new}")
         print(f"  new videos         : {result.transcript_new}")
         print(f"  grounded rows      : {len(rows)}  {result.by_intake}")
@@ -716,6 +717,7 @@ def run_discover(
         print(f"Discovery intake — mailbox: {addr}  ·  source: {source}")
         print("=" * 68)
         print(f"  emails ingested    : {len(email.documents)}")
+        print(f"  emails trashed     : {email.deleted_count}")
         print(f"  grounded rows      : {len(rows)}")
         if stale_programs:
             print(f"  devaluation -> stale: {', '.join(sorted(stale_programs))}")

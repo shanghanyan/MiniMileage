@@ -60,6 +60,14 @@ creators:
     youtube: null
     trust: 0.50
 
+  - name: view_from_the_wing
+    blog_rss: https://viewfromthewing.com/feed/       # verify
+    # Gary Leff appears as a guest on OTHER channels' videos (interviews,
+    # retrospectives) but has no own-channel UC id found — per the "never
+    # guess a UC string" rule above, left null rather than guessed.
+    youtube: null
+    trust: 0.50                                       # established, opinion-heavy like TPG; weight accordingly
+
   - name: daily_drop
     blog_rss: null   # TODO — Daily Drop is a newsletter platform; RSS uncertain.
     youtube: null    # Primary intake is the email newsletter -> source_name="email:dailydrop"

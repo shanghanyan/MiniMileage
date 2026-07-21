@@ -98,6 +98,8 @@ _EXACT: dict[str, str] = {
     # Middle East
     "middle east": "middle_east",
     "gulf": "middle_east",
+    "dubai": "middle_east",              # Emirates ATF chart hub token (2026-07-20)
+    "abu dhabi": "middle_east",          # Etihad ATF chart hub token (2026-07-20)
     # Oceania
     "oceania": "oceania",
     "south pacific": "oceania",

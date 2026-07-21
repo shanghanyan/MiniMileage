@@ -81,6 +81,14 @@ class Config:
     # (.env), never hardcoded. App-Password IMAP only — no OAuth, no Gmail API.
     gmail_address: Optional[str] = None
     gmail_app_password: Optional[str] = None
+    # When True (default), messages successfully polled over live IMAP are
+    # moved to [Gmail]/Trash after extraction so the inbox doesn't fill up with
+    # already-scraped mail forever (previously: PEEK-only, never marked/removed
+    # at the message level — see mileage-project-state memory). Gmail keeps
+    # trashed mail ~30 days before permanent purge, so this is recoverable, not
+    # a hard delete. Never touches fixtures/offline runs. Set
+    # GMAIL_AUTO_DELETE=0 to keep the old poll-forever behavior.
+    gmail_auto_delete: bool = True
     # --- Phase 8b: URL rediscovery (§F) ----------------------------------- #
     # Deterministic scraping of known-good URLs is the default + cheap path. An
     # LLM/web search runs ONLY when a source rots, behind this flag AND a search
@@ -131,6 +139,8 @@ class Config:
             offline=os.getenv("MILEAGE_OFFLINE", "") not in ("", "0", "false"),
             gmail_address=os.getenv("GMAIL_ADDRESS") or None,
             gmail_app_password=os.getenv("GMAIL_APP_PASSWORD") or None,
+            gmail_auto_delete=os.getenv("GMAIL_AUTO_DELETE", "1")
+            not in ("0", "false", "False"),
             url_rediscovery_enabled=os.getenv("MILEAGE_URL_REDISCOVERY", "")
             not in ("", "0", "false"),
             bing_search_api_key=os.getenv("BING_SEARCH_API_KEY") or None,

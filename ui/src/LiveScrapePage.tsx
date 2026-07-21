@@ -54,6 +54,11 @@ function TargetCard({ target }: { target: ScrapeTarget }) {
               downgraded from fail
             </span>
           )}
+          {target.block_type && target.block_type !== "none" && (
+            <span className="scrape-meta-chip muted">
+              block: {target.block_type}
+            </span>
+          )}
         </div>
         <span className="scrape-rows">
           {target.rows} row{target.rows === 1 ? "" : "s"}

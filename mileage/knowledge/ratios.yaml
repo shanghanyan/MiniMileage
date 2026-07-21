@@ -14,7 +14,15 @@ url: https://www.capitalone.com/credit-cards/benefits/transfer-partners/
 trust: 1.0            # authoritative for ratios (§7 authoritative short-circuit)
 updated_at: "2026-06-01"
 partners:
-  aeroplan: 1.0       # Air Canada Aeroplan (Star Alliance)
+  aeroplan:
+    ratio: 1.0          # Air Canada Aeroplan (Star Alliance)
+    # Demo transfer bonus — lets the optimizer rank base 1:1 vs boosted path.
+    # Window kept open through 2026 so local demos / tests see both options;
+    # expire or delete when a real calendar feed replaces this seed.
+    bonus: 1.3          # +30% (transfer 10k C1 → 13k Aeroplan)
+    valid_from: "2026-07-01"
+    valid_until: "2026-12-31"
+    label: "+30% Aeroplan transfer bonus"
   turkish: 1.0        # Turkish Miles&Smiles (Star Alliance)
   lifemiles: 1.0      # Avianca LifeMiles (Star Alliance)
   krisflyer: 1.0      # Singapore KrisFlyer (Star Alliance)
@@ -29,6 +37,18 @@ partners:
                       # secondary-sourced (not the §7 authoritative short-circuit)
                       # until confirmed against the official page.
   # united: intentionally absent — see note above.
+  # --- Tier 2 expansion (2026-07-20) — ratios read off each program's own
+  # ATF award-chart page ("How to Earn X" transfer-partner list), not a
+  # separate transfer-partner page — secondary-sourced like the rest of this
+  # block below. Only added because a real chart source now exists in
+  # sources.yaml for each (see the 2026-07-20 entries there).
+  flying_blue: 1.0
+  virgin_atlantic: 1.0
+  avios: 1.0
+  cathay_pacific: 1.0
+  emirates: 0.75      # confirmed 4:3 on Emirates' own ATF chart page (not 1:1)
+  etihad: 1.0
+  qantas: 1.0
 
 # --- Additional transferable currencies (Phase 7 data-only expansion, §13) ---
 # Each block is the same shape as the capital_one block above and is loaded by
@@ -60,6 +80,15 @@ currencies:
       krisflyer: 1.0    # Singapore KrisFlyer
       # NOT partners (confirmed absent from Amex's 17-airline list, Jul 2026):
       # turkish, eva.
+      # --- Tier 2 expansion (2026-07-20), each ratio read off the program's
+      # own ATF chart page's Amex entry:
+      flying_blue: 1.0
+      virgin_atlantic: 1.0
+      avios: 1.0
+      cathay_pacific: 0.8   # confirmed 5:4 on Cathay's own ATF chart page
+      emirates: 0.8         # confirmed 5:4 on Emirates' own ATF chart page
+      etihad: 1.0
+      qantas: 1.0
 
   - from_currency: chase_ur
     source: "The Points Guy — Chase Ultimate Rewards transfer partners"
@@ -71,6 +100,14 @@ currencies:
       krisflyer: 1.0    # Singapore KrisFlyer
       # NOT partners (confirmed absent from Chase's 10-airline list, Jun 2026):
       # turkish, lifemiles, ana, eva.
+      # --- Tier 2 expansion (2026-07-20). Confirmed ABSENT from this block:
+      # emirates ("Chase does NOT transfer to Emirates" — stated directly on
+      # Emirates' own ATF chart page), cathay_pacific, qantas (neither lists
+      # Chase among their transfer partners either).
+      flying_blue: 1.0
+      virgin_atlantic: 1.0
+      avios: 1.0
+      etihad: 1.0
 
   - from_currency: citi_typ
     source: "Award Travel Finder — Citi ThankYou Points transfer partners"
@@ -88,6 +125,16 @@ currencies:
       # above, does not yet model per-card variation. Treat these four ratios
       # as a best-case ceiling, not guaranteed for every Citi card.
       # NOT partners: aeroplan, ana.
+      # --- Tier 2 expansion (2026-07-20), each ratio read off the program's
+      # own ATF chart page's Citi entry. Citi transfers to all 7 new programs
+      # added this session — the widest reach of any card in this file.
+      flying_blue: 1.0
+      virgin_atlantic: 1.0
+      avios: 1.0
+      cathay_pacific: 1.0
+      emirates: 0.8       # confirmed 5:4 on Emirates' own ATF chart page
+      etihad: 1.0
+      qantas: 1.0
 
   - from_currency: bilt
     source: "Bilt Rewards — official transfer partners list"
@@ -100,3 +147,12 @@ currencies:
       aeroplan: 1.0     # Air Canada Aeroplan
       # NOT partners (confirmed absent from Bilt's official 19-airline list):
       # krisflyer, ana, eva.
+      # --- Tier 2 expansion (2026-07-20), each ratio read off the program's
+      # own ATF chart page's Bilt entry. Confirmed ABSENT: qantas (not in
+      # Qantas' own 3-partner list — Amex/Capital One/Citi only).
+      flying_blue: 1.0
+      virgin_atlantic: 1.0
+      avios: 1.0
+      cathay_pacific: 1.0
+      emirates: 1.0       # Bilt is Emirates' only remaining 1:1 partner per its own page
+      etihad: 1.0

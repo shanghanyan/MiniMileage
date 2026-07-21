@@ -41,6 +41,10 @@ class EmailDocument:
     subject: str
     body: str
     received_at: Optional[str] = None
+    # IMAP UID of the source message (live poll only; None for .eml fixtures).
+    # Used solely to move the message to Trash after it's been processed —
+    # never used for extraction.
+    uid: Optional[str] = None
 
     @property
     def source_name(self) -> str:
@@ -55,6 +59,7 @@ class DiscoveryResult:
     stale_programs: set = field(default_factory=set)
     used_fixtures: bool = False
     email_links_followed: int = 0
+    deleted_count: int = 0  # messages moved to Trash after processing
 
 
 # --------------------------------------------------------------------------- #
@@ -132,18 +137,21 @@ def _fixture_documents(fixture_dir: Path) -> List[EmailDocument]:
 def _imap_documents(
     address: str, app_password: str, *, limit: int
 ) -> List[EmailDocument]:
-    """Poll unread Gmail over IMAP. PEEK keeps messages unread (idempotent)."""
+    """Poll unread Gmail over IMAP by UID. PEEK keeps messages unread while we
+    read them; UIDs are stable across the connection so a later, separate
+    read-write connection can safely move exactly these messages to Trash
+    once they've actually been processed (see `_delete_processed`)."""
     docs: List[EmailDocument] = []
     conn = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
     try:
         conn.login(address, app_password)
         conn.select("INBOX", readonly=True)
-        typ, data = conn.search(None, "UNSEEN")
+        typ, data = conn.uid("search", None, "UNSEEN")
         if typ != "OK":
             return docs
-        ids = data[0].split()[:limit] if data and data[0] else []
-        for mid in ids:
-            typ, msg_data = conn.fetch(mid, "(BODY.PEEK[])")
+        uids = data[0].split()[:limit] if data and data[0] else []
+        for raw_uid in uids:
+            typ, msg_data = conn.uid("fetch", raw_uid, "(BODY.PEEK[])")
             if typ != "OK" or not msg_data:
                 continue
             raw = next(
@@ -151,7 +159,9 @@ def _imap_documents(
             )
             if raw is None:
                 continue
-            docs.append(_to_document(email.message_from_bytes(raw)))
+            doc = _to_document(email.message_from_bytes(raw))
+            doc.uid = raw_uid.decode() if isinstance(raw_uid, bytes) else str(raw_uid)
+            docs.append(doc)
     finally:
         try:
             conn.close()
@@ -162,6 +172,49 @@ def _imap_documents(
         except Exception:
             pass
     return docs
+
+
+def _delete_processed(address: str, app_password: str, uids: List[str]) -> int:
+    """Move already-processed messages to [Gmail]/Trash by UID.
+
+    A soft delete, not a hard one: Gmail keeps trashed mail ~30 days before
+    permanent purge, so this is recoverable if something was moved that
+    shouldn't have been. Opens its own read-write connection (the poll
+    connection above stays readonly) and never raises — a failure here just
+    means the inbox doesn't get tidied this run, not that discovery fails.
+    Returns the number of messages actually moved.
+    """
+    if not uids:
+        return 0
+    conn = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+    moved = 0
+    try:
+        conn.login(address, app_password)
+        conn.select("INBOX", readonly=False)
+        for uid in uids:
+            try:
+                typ, _ = conn.uid("COPY", uid, "[Gmail]/Trash")
+                if typ != "OK":
+                    log.info("delete: COPY to Trash failed for uid %s", uid)
+                    continue
+                conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
+                moved += 1
+            except Exception as exc:
+                log.info("delete: failed for uid %s (%s)", uid, exc)
+        conn.expunge()
+    except Exception as exc:
+        log.warning("delete: IMAP connection failed (%s); inbox left untouched", exc)
+        return moved
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        try:
+            conn.logout()
+        except Exception:
+            pass
+    return moved
 
 
 def fetch_email_documents(
@@ -260,5 +313,20 @@ def run_discovery(
             )
             result.rows.extend(link_rows)
             result.email_links_followed += n_links
+
+    # Tidy the inbox: once a live-polled message has actually been run through
+    # the extractor above, it's done its job — move it to Trash so `UNSEEN`
+    # doesn't grow forever with the same already-scraped mail every run (see
+    # mileage-project-state memory: previously there was no message-level
+    # cleanup at all). Fixtures/offline runs and disabled auto-delete skip this.
+    if not used_fixtures and getattr(config, "gmail_auto_delete", True):
+        address = getattr(config, "gmail_address", None)
+        password = getattr(config, "gmail_app_password", None)
+        uids = [d.uid for d in documents if d.uid]
+        if address and password and uids:
+            try:
+                result.deleted_count = _delete_processed(address, password, uids)
+            except Exception as exc:  # never let cleanup break discovery
+                log.warning("post-discovery inbox cleanup failed: %s", exc)
 
     return result

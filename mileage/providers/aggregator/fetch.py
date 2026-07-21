@@ -30,6 +30,7 @@ from typing import Optional
 
 import httpx
 
+from .block_detect import BLOCK_NONE, BLOCK_NETWORK, BLOCK_UNKNOWN, classify_block
 from .politeness import PolitenessPolicy
 
 log = logging.getLogger("mileage.aggregator.fetch")
@@ -116,7 +117,12 @@ except Exception:  # pragma: no cover
 
 @dataclass
 class FetchResult:
-    """Normalized output of any fetch path (live HTTP, impersonated, archived)."""
+    """Normalized output of any fetch path (live HTTP, impersonated, archived).
+
+    On total chain failure we still return a *non-ok* result (empty text) with
+    ``block_type`` set so callers can see *why* the bot was stopped — Bypass
+    layer 1. Offline mode still returns ``None`` (no network attempt).
+    """
 
     url: str                 # the URL we were asked for
     text: str                # decoded body
@@ -128,6 +134,9 @@ class FetchResult:
     # Undecoded body. Required for binary formats (PDF) where `text` is a lossy
     # decode and pdfplumber needs the original bytes. None for legacy callers.
     raw: Optional[bytes] = None
+    # Bypass layer 1 — what stopped / challenged this attempt (see block_detect).
+    block_type: str = BLOCK_NONE
+    block_signals: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -188,7 +197,13 @@ class Fetcher:
     # Public API
     # ------------------------------------------------------------------ #
     def get(self, url: str) -> Optional[FetchResult]:
-        """Fetch `url`, walking the fallback chain. None means total failure."""
+        """Fetch `url`, walking the fallback chain.
+
+        Returns an ok ``FetchResult`` on success. On chain exhaustion returns a
+        *non-ok* ``FetchResult`` carrying ``block_type`` (Bypass layer 1) so
+        callers can diagnose the block — not ``None``. Offline mode still
+        returns ``None`` (no attempt was made).
+        """
         scheme = urllib.parse.urlparse(url).scheme
         if scheme == "file" or scheme == "":
             return self._get_file(url)
@@ -199,27 +214,48 @@ class Fetcher:
             return None
 
         domain = urllib.parse.urlparse(url).netloc
+        last_fail: Optional[FetchResult] = None
 
         # 1) httpx, with adaptive throttle + bounded 429 backoff.
         result = self._get_http(url, domain)
         if result is not None and result.ok:
-            return result
+            return self._annotate_ok(result)
+        if result is not None:
+            last_fail = result
 
         # 2) curl_cffi impersonation (header/TLS-only blocks) — optional.
         if self.impersonate:
             imp = self._get_curl_cffi(url, domain)
             if imp is not None and imp.ok:
-                return imp
+                return self._annotate_ok(imp)
+            if imp is not None:
+                last_fail = imp
 
         # 3) Wayback Machine snapshot — last public, robots-respecting resort.
         if self.use_wayback:
             self.politeness.record_block(domain)
             snap = self._get_wayback(url)
             if snap is not None and snap.ok:
-                return snap
+                return self._annotate_ok(snap)
+            if snap is not None:
+                last_fail = snap
 
-        log.info("fetch failed for %s (chain exhausted)", url)
-        return None
+        log.info(
+            "fetch failed for %s (chain exhausted, block_type=%s)",
+            url,
+            last_fail.block_type if last_fail else BLOCK_UNKNOWN,
+        )
+        if last_fail is not None:
+            return last_fail
+        return FetchResult(
+            url=url,
+            text="",
+            status=0,
+            final_url=url,
+            via="none",
+            block_type=BLOCK_NETWORK,
+            block_signals=["chain_exhausted_no_response"],
+        )
 
     def head_ok(self, url: str) -> tuple[bool, int]:
         """Lightweight liveness probe for `--validate-urls` (returns ok, status)."""
@@ -247,10 +283,54 @@ class Fetcher:
             return False, 0
 
     # ------------------------------------------------------------------ #
+    # Classification helpers
+    # ------------------------------------------------------------------ #
+    def _annotate_ok(self, result: FetchResult) -> FetchResult:
+        """Attach block_type even on HTTP 200 (challenge / short shell pages)."""
+        bt, signals = classify_block(
+            status=result.status if result.status else 200,
+            body=result.text,
+        )
+        result.block_type = bt
+        result.block_signals = signals
+        return result
+
+    def _failed(
+        self,
+        url: str,
+        *,
+        status: int,
+        via: str,
+        text: str = "",
+        headers: Optional[dict] = None,
+        final_url: Optional[str] = None,
+        error: Optional[BaseException] = None,
+        flags: Optional[list[str]] = None,
+        raw: Optional[bytes] = None,
+        content_type: str = "",
+    ) -> FetchResult:
+        bt, signals = classify_block(
+            status=status, headers=headers, body=text, error=error
+        )
+        return FetchResult(
+            url=url,
+            text=text[:4000] if text else "",
+            status=status,
+            final_url=final_url or url,
+            content_type=content_type,
+            via=via,
+            flags=list(flags or []),
+            raw=raw,
+            block_type=bt,
+            block_signals=signals,
+        )
+
+    # ------------------------------------------------------------------ #
     # Fetch paths
     # ------------------------------------------------------------------ #
     def _get_http(self, url: str, domain: str) -> Optional[FetchResult]:
         attempts = self.max_429_retries + 1
+        last: Optional[FetchResult] = None
         for attempt in range(attempts):
             self.politeness.before_request(domain)
             try:
@@ -264,16 +344,45 @@ class Fetcher:
             except Exception as exc:
                 self.politeness.on_response(domain, 0)
                 log.info("httpx error for %s: %s", url, exc)
-                return None
+                return self._failed(url, status=0, via="httpx", error=exc)
 
             self.politeness.on_response(domain, resp.status_code)
+            hdrs = dict(resp.headers)
             if resp.status_code == 429 and attempt < attempts - 1:
                 log.info("429 from %s; backing off (attempt %d)", domain, attempt + 1)
+                last = self._failed(
+                    url,
+                    status=429,
+                    via="httpx",
+                    text=resp.text,
+                    headers=hdrs,
+                    final_url=str(resp.url),
+                    content_type=resp.headers.get("content-type", ""),
+                    raw=resp.content,
+                )
                 continue  # politeness already widened the delay
             if resp.status_code in _BLOCK_STATUSES:
-                return None
+                return self._failed(
+                    url,
+                    status=resp.status_code,
+                    via="httpx",
+                    text=resp.text,
+                    headers=hdrs,
+                    final_url=str(resp.url),
+                    content_type=resp.headers.get("content-type", ""),
+                    raw=resp.content,
+                )
             if resp.status_code != 200:
-                return None
+                return self._failed(
+                    url,
+                    status=resp.status_code,
+                    via="httpx",
+                    text=resp.text,
+                    headers=hdrs,
+                    final_url=str(resp.url),
+                    content_type=resp.headers.get("content-type", ""),
+                    raw=resp.content,
+                )
             return FetchResult(
                 url=url,
                 text=resp.text,
@@ -283,7 +392,7 @@ class Fetcher:
                 via="httpx",
                 raw=resp.content,
             )
-        return None
+        return last
 
     def _get_curl_cffi(self, url: str, domain: str) -> Optional[FetchResult]:  # pragma: no cover
         if not _HAS_CURL_CFFI:
@@ -295,16 +404,26 @@ class Fetcher:
             )
         except Exception as exc:
             log.info("curl_cffi error for %s: %s", url, exc)
-            return None
+            return self._failed(url, status=0, via="curl_cffi", error=exc)
         self.politeness.on_response(domain, resp.status_code)
+        hdrs = dict(getattr(resp, "headers", {}) or {})
         if resp.status_code != 200:
-            return None
+            return self._failed(
+                url,
+                status=resp.status_code,
+                via="curl_cffi",
+                text=getattr(resp, "text", "") or "",
+                headers=hdrs,
+                flags=["impersonated"],
+                raw=getattr(resp, "content", None),
+                content_type=hdrs.get("content-type", ""),
+            )
         return FetchResult(
             url=url,
             text=resp.text,
             status=resp.status_code,
             final_url=url,
-            content_type=resp.headers.get("content-type", ""),
+            content_type=hdrs.get("content-type", ""),
             via="curl_cffi",
             flags=["impersonated"],
             raw=resp.content,
@@ -317,13 +436,18 @@ class Fetcher:
             meta = httpx.get(api, timeout=self.timeout, trust_env=self.trust_env).json()
         except Exception as exc:
             log.info("wayback lookup failed for %s: %s", url, exc)
-            return None
+            return self._failed(url, status=0, via="wayback", error=exc)
         snap = (
             meta.get("archived_snapshots", {})
             .get("closest", {})
         )
         if not snap.get("available") or not snap.get("url"):
-            return None
+            return self._failed(
+                url,
+                status=0,
+                via="wayback",
+                flags=["from_wayback"],
+            )
         snap_url = snap["url"]
         try:
             resp = httpx.get(
@@ -333,7 +457,10 @@ class Fetcher:
             resp.raise_for_status()
         except Exception as exc:
             log.info("wayback fetch failed for %s: %s", snap_url, exc)
-            return None
+            status = getattr(getattr(exc, "response", None), "status_code", 0) or 0
+            return self._failed(
+                url, status=status, via="wayback", error=exc, flags=["from_wayback"]
+            )
         return FetchResult(
             url=url,
             text=resp.text,
